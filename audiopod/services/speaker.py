@@ -102,11 +102,33 @@ class SpeakerService(BaseService):
         return response
 
     def get_job(self, job_id: int) -> Dict[str, Any]:
-        """Get speaker job status."""
+        """Get speaker job details and status."""
         if self.async_mode:
             return self._async_get_job(job_id)
-        return self.client.request("GET", f"/api/v1/speaker/status/{job_id}")
+        return self.client.request("GET", f"/api/v1/speaker/jobs/{job_id}")
 
     async def _async_get_job(self, job_id: int) -> Dict[str, Any]:
-        return await self.client.request("GET", f"/api/v1/speaker/status/{job_id}")
+        return await self.client.request("GET", f"/api/v1/speaker/jobs/{job_id}")
+
+    def list_jobs(self, skip: int = 0, limit: int = 50) -> List[Dict[str, Any]]:
+        """List speaker jobs."""
+        if self.async_mode:
+            return self._async_list_jobs(skip, limit)
+        return self.client.request(
+            "GET", "/api/v1/speaker/jobs", params={"skip": skip, "limit": limit}
+        )
+
+    async def _async_list_jobs(self, skip: int, limit: int) -> List[Dict[str, Any]]:
+        return await self.client.request(
+            "GET", "/api/v1/speaker/jobs", params={"skip": skip, "limit": limit}
+        )
+
+    def delete_job(self, job_id: int) -> Dict[str, str]:
+        """Delete a speaker job."""
+        if self.async_mode:
+            return self._async_delete_job(job_id)
+        return self.client.request("DELETE", f"/api/v1/speaker/jobs/{job_id}")
+
+    async def _async_delete_job(self, job_id: int) -> Dict[str, str]:
+        return await self.client.request("DELETE", f"/api/v1/speaker/jobs/{job_id}")
 
