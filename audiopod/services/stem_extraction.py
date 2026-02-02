@@ -2,9 +2,14 @@
 Stem Extraction Service - Audio stem separation
 """
 
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 from .base import BaseService
 from ..exceptions import ValidationError
+
+
+# Valid separation modes for the new API
+StemMode = Literal["single", "two", "four", "six", "producer", "studio", "mastering"]
+SingleStem = Literal["vocals", "drums", "bass", "guitar", "piano", "other", "instrumental"]
 
 
 class StemExtractionService(BaseService):
@@ -17,19 +22,131 @@ class StemExtractionService(BaseService):
 
         client = Client()
 
-        # Extract all stems
-        job = client.stem_extraction.extract_stems(
-            audio_file="song.mp3",
-            stem_types=["vocals", "drums", "bass", "other"],
-            wait_for_completion=True
+        # Simple mode-based extraction (recommended)
+        result = client.stem_extraction.separate(
+            url="https://youtube.com/watch?v=VIDEO_ID",
+            mode="six"
         )
+        for stem, url in result["download_urls"].items():
+            print(f"{stem}: {url}")
 
-        # Download stems
-        for stem_name, url in job["download_urls"].items():
-            print(f"{stem_name}: {url}")
+        # Or extract only vocals
+        result = client.stem_extraction.separate(
+            file="song.mp3",
+            mode="single",
+            stem="vocals"
+        )
         ```
     """
 
+    def separate(
+        self,
+        file: Optional[str] = None,
+        url: Optional[str] = None,
+        mode: StemMode = "four",
+        stem: Optional[SingleStem] = None,
+        wait_for_completion: bool = True,
+        timeout: int = 900,
+    ) -> Dict[str, Any]:
+        """
+        Separate audio into stems using simple mode selection.
+
+        Args:
+            file: Path to local audio file
+            url: URL of audio/video (YouTube, SoundCloud, direct link)
+            mode: Separation mode:
+                - "single": Extract one stem (specify stem param)
+                - "two": Vocals + Instrumental
+                - "four": Vocals, Drums, Bass, Other (default)
+                - "six": Vocals, Drums, Bass, Guitar, Piano, Other
+                - "producer": 8 stems with kick, snare, hihat
+                - "studio": 12 stems for professional mixing
+                - "mastering": 16 stems maximum detail
+            stem: For mode="single", which stem to extract
+            wait_for_completion: Wait for job to complete (default: True)
+            timeout: Max wait time in seconds
+
+        Returns:
+            Job dict with id, status, download_urls (when completed)
+        """
+        if not file and not url:
+            raise ValidationError("Provide file or url")
+
+        if file and url:
+            raise ValidationError("Provide file or url, not both")
+
+        if mode == "single" and not stem:
+            raise ValidationError(
+                "stem parameter required for mode='single'. "
+                "Options: vocals, drums, bass, guitar, piano, other, instrumental"
+            )
+
+        data = {"mode": mode}
+        if stem:
+            data["stem"] = stem
+        if url:
+            data["url"] = url
+
+        files = self._prepare_file_upload(file, "file") if file else None
+
+        if self.async_mode:
+            return self._async_separate(data, files, wait_for_completion, timeout)
+
+        response = self.client.request(
+            "POST", "/api/v1/stem-extraction/api/extract", data=data, files=files
+        )
+
+        if wait_for_completion:
+            return self._wait_for_stem_job(response["id"], timeout)
+
+        return response
+
+    async def _async_separate(
+        self,
+        data: Dict[str, Any],
+        files: Optional[Dict[str, Any]],
+        wait_for_completion: bool,
+        timeout: int,
+    ) -> Dict[str, Any]:
+        response = await self.client.request(
+            "POST", "/api/v1/stem-extraction/api/extract", data=data, files=files
+        )
+        if wait_for_completion:
+            return await self._async_wait_for_stem_job(response["id"], timeout)
+        return response
+
+    def extract(
+        self,
+        file: Optional[str] = None,
+        url: Optional[str] = None,
+        mode: StemMode = "four",
+        stem: Optional[SingleStem] = None,
+    ) -> Dict[str, Any]:
+        """
+        Submit stem extraction job (returns immediately without waiting).
+
+        Use wait_for_completion() to poll for results.
+        """
+        return self.separate(file=file, url=url, mode=mode, stem=stem, wait_for_completion=False)
+
+    def wait_for_completion(self, job_id: int, timeout: int = 900) -> Dict[str, Any]:
+        """Wait for stem extraction job to complete."""
+        return self._wait_for_stem_job(job_id, timeout)
+
+    def status(self, job_id: int) -> Dict[str, Any]:
+        """Get stem extraction job status (alias for get_job)."""
+        return self.get_job(job_id)
+
+    def modes(self) -> Dict[str, Any]:
+        """Get available separation modes."""
+        if self.async_mode:
+            return self._async_modes()
+        return self.client.request("GET", "/api/v1/stem-extraction/modes")
+
+    async def _async_modes(self) -> Dict[str, Any]:
+        return await self.client.request("GET", "/api/v1/stem-extraction/modes")
+
+    # Legacy method - kept for backward compatibility
     def extract_stems(
         self,
         audio_file: Optional[str] = None,
@@ -41,7 +158,9 @@ class StemExtractionService(BaseService):
         timeout: int = 900,
     ) -> Dict[str, Any]:
         """
-        Extract stems from audio.
+        Extract stems from audio (legacy method).
+
+        For new code, use separate() instead which uses the simpler mode-based API.
 
         Args:
             audio_file: Path to local audio file

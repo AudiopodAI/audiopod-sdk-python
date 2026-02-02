@@ -16,6 +16,25 @@ from .base import BaseService
 class TranscriptionService(BaseService):
     """Service for speech-to-text transcription."""
 
+    def create(
+        self,
+        file: Optional[str] = None,
+        url: Optional[str] = None,
+        language: Optional[str] = None,
+        speaker_diarization: bool = False,
+        wait_for_completion: bool = False,
+        timeout: int = 600,
+    ) -> Dict[str, Any]:
+        """Alias for transcribe() - matches Node.js SDK."""
+        return self.transcribe(
+            audio_file=file,
+            url=url,
+            language=language,
+            speaker_diarization=speaker_diarization,
+            wait_for_completion=wait_for_completion,
+            timeout=timeout,
+        )
+
     def transcribe(
         self,
         audio_file: Optional[str] = None,
@@ -147,6 +166,10 @@ class TranscriptionService(BaseService):
         return await self.client.request(
             "GET", f"/api/v1/transcription/jobs/{job_id}/transcript", params={"format": format}
         )
+
+    def wait_for_completion(self, job_id: int, timeout: int = 600) -> Dict[str, Any]:
+        """Wait for transcription job completion (matches Node.js SDK)."""
+        return self._wait_for_transcription(job_id, timeout)
 
     def _wait_for_transcription(self, job_id: int, timeout: int) -> Dict[str, Any]:
         """Wait for transcription job completion."""

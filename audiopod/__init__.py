@@ -15,9 +15,13 @@ from .exceptions import (
     InsufficientBalanceError,
 )
 
+# Alias for consistency with documentation and Node.js SDK
+AudioPod = Client
+
 __all__ = [
     "Client",
     "AsyncClient",
+    "AudioPod",  # Alias for Client
     "AudioPodError",
     "AuthenticationError", 
     "APIError",

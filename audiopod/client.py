@@ -24,6 +24,7 @@ from .services import (
     CreditService,
     StemExtractionService,
     WalletService,
+    VideoService,
 )
 
 logger = logging.getLogger(__name__)
@@ -75,6 +76,7 @@ class BaseClient:
     def _get_headers(self) -> Dict[str, str]:
         return {
             "Authorization": f"Bearer {self.api_key}",
+            "X-API-Key": self.api_key,
             "Content-Type": "application/json",
             "User-Agent": f"audiopod-python/{self.config.version}",
             "Accept": "application/json",
@@ -155,7 +157,9 @@ class Client(BaseClient):
         self.denoiser = DenoiserService(self)
         self.credits = CreditService(self)
         self.stem_extraction = StemExtractionService(self)
+        self.stems = self.stem_extraction  # Alias for consistency with Node.js SDK
         self.wallet = WalletService(self)
+        self.video = VideoService(self)
 
     def request(
         self,
@@ -232,7 +236,9 @@ class AsyncClient(BaseClient):
         self.denoiser = DenoiserService(self, async_mode=True)
         self.credits = CreditService(self, async_mode=True)
         self.stem_extraction = StemExtractionService(self, async_mode=True)
+        self.stems = self.stem_extraction  # Alias for consistency with Node.js SDK
         self.wallet = WalletService(self, async_mode=True)
+        self.video = VideoService(self, async_mode=True)
 
     @property
     def session(self) -> aiohttp.ClientSession:

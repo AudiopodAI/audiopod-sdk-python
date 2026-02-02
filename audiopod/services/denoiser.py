@@ -17,25 +17,30 @@ class DenoiserService(BaseService):
 
     def denoise(
         self,
-        audio_file: Optional[str] = None,
+        file: Optional[str] = None,
         url: Optional[str] = None,
         mode: str = "balanced",
-        wait_for_completion: bool = False,
+        wait_for_completion: bool = True,
         timeout: int = 300,
+        # Legacy parameter name
+        audio_file: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Remove noise from audio.
 
         Args:
-            audio_file: Path to local audio file
+            file: Path to local audio file
             url: URL of audio file
             mode: Denoise mode ("balanced", "studio", or "ultra")
-            wait_for_completion: Wait for completion
+            wait_for_completion: Wait for completion (default: True)
             timeout: Max wait time in seconds
 
         Returns:
             Job dict with denoised audio URL when completed
         """
+        # Support both 'file' and legacy 'audio_file' parameter names
+        audio_file = file or audio_file
+        
         data = {"mode": mode}
         if url:
             data["url"] = url
