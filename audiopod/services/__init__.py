@@ -12,6 +12,7 @@ from .denoiser import DenoiserService
 from .credits import CreditService
 from .stem_extraction import StemExtractionService
 from .wallet import WalletService
+from .video import VideoService
 
 __all__ = [
     "BaseService",
@@ -24,5 +25,6 @@ __all__ = [
     "CreditService",
     "StemExtractionService",
     "WalletService",
+    "VideoService",
 ]
 
