@@ -17,8 +17,10 @@ __pycache__/
 # IDE
 .idea/
 .vscode/
+*.iml
 *.swp
 *.swo
+*~
 
 # OS
 .DS_Store
