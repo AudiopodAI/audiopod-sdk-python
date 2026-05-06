@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "audiopod"
-version = "2.3.0"
-description = "AudioPod SDK for Python - Professional Audio Processing powered by AI"
+version = "2.4.0"
+description = "AudioPod SDK + CLI for Python - Professional Audio Processing powered by AI"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.8"
@@ -35,6 +35,9 @@ dependencies = [
 Homepage = "https://audiopod.ai"
 Documentation = "https://docs.audiopod.ai"
 Repository = "https://github.com/AudiopodAI/audiopod-python"
+
+[project.scripts]
+audiopod = "audiopod.cli:main"
 
 [project.optional-dependencies]
 dev = [
