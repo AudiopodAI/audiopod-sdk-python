@@ -1,6 +1,14 @@
 # AudioPod Python SDK
 
-Official Python SDK for [AudioPod AI](https://audiopod.ai) - Professional Audio Processing powered by AI.
+Official Python SDK for [AudioPod AI](https://audiopod.ai) — professional audio
+processing powered by AI: stem separation, transcription, voice cloning, TTS,
+music generation, and noise reduction.
+
+This SDK is the **Platform (API + Agent)** surface of AudioPod — the developer
+entry point alongside the [Node.js SDK](https://www.npmjs.com/package/audiopod),
+the CLI, and the MCP server. API access is **pay-as-you-go** ($1 = 7,500 credits,
+credits never expire) — no subscription required. Get a key at
+[audiopod.ai/dashboard/account/api-keys](https://www.audiopod.ai/dashboard/account/api-keys).
 
 ## Installation
 
