@@ -25,6 +25,7 @@ from .services import (
     StemExtractionService,
     WalletService,
     VideoService,
+    AudiobookService,
 )
 
 logger = logging.getLogger(__name__)
@@ -160,6 +161,7 @@ class Client(BaseClient):
         self.stems = self.stem_extraction  # Alias for consistency with Node.js SDK
         self.wallet = WalletService(self)
         self.video = VideoService(self)
+        self.audiobook = AudiobookService(self)
 
     def request(
         self,
@@ -239,6 +241,7 @@ class AsyncClient(BaseClient):
         self.stems = self.stem_extraction  # Alias for consistency with Node.js SDK
         self.wallet = WalletService(self, async_mode=True)
         self.video = VideoService(self, async_mode=True)
+        self.audiobook = AudiobookService(self, async_mode=True)
 
     @property
     def session(self) -> aiohttp.ClientSession:
