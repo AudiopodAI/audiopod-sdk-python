@@ -218,6 +218,23 @@ def cmd_clone(args: argparse.Namespace) -> None:
     _print(args, voice)
 
 
+def cmd_audiobook(args: argparse.Namespace) -> None:
+    client = _client(args)
+    result = client.audiobook.produce(
+        title=args.title,
+        author=args.author,
+        file=args.file,
+        text=args.text,
+        voice_id=int(args.voice),
+        timeout=args.timeout,
+    )
+    if args.out and isinstance(result, dict) and result.get("download_url"):
+        _download(result["download_url"], Path(args.out))
+        print(f"Saved {args.out}")
+    else:
+        _print(args, result)
+
+
 def cmd_jobs(args: argparse.Namespace) -> None:
     client = _client(args)
     response = client.request("GET", f"/api/v1/jobs/{args.job_id}", json_data=None)
@@ -304,6 +321,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_cl.add_argument("--name", required=True)
     p_cl.add_argument("--description", default=None)
     p_cl.set_defaults(func=cmd_clone)
+
+    p_ab = sub.add_parser("audiobook", help="Produce an ACX audiobook from a manuscript (PDF/EPUB/DOCX/TXT).")
+    p_ab.add_argument("file", nargs="?", default=None, help="Manuscript file. Omit and use --text to narrate raw text.")
+    p_ab.add_argument("--title", required=True)
+    p_ab.add_argument("--author", default=None)
+    p_ab.add_argument("--text", default=None, help="Narrate this text instead of a file.")
+    p_ab.add_argument("--voice", default="387", help="Narration voice ID (default 387).")
+    p_ab.add_argument("--out", default=None, help="Download the ACX package ZIP to this path.")
+    p_ab.add_argument("--timeout", type=int, default=1800)
+    p_ab.set_defaults(func=cmd_audiobook)
 
     p_j = sub.add_parser("jobs", help="Look up an async job by id.")
     p_j.add_argument("job_id")
