@@ -6,6 +6,7 @@ from .base import BaseService
 from .voice import VoiceService
 from .music import MusicService
 from .transcription import TranscriptionService
+from .transcription_stream import TranscriptionStreamSession
 from .translation import TranslationService
 from .speaker import SpeakerService
 from .denoiser import DenoiserService
@@ -20,6 +21,7 @@ __all__ = [
     "VoiceService",
     "MusicService",
     "TranscriptionService",
+    "TranscriptionStreamSession",
     "TranslationService",
     "SpeakerService",
     "DenoiserService",
