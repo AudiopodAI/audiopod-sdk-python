@@ -9,8 +9,12 @@ API Routes:
 - DELETE /api/v1/transcription/jobs/{id}       - Delete job
 """
 
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, TYPE_CHECKING
 from .base import BaseService
+from ..exceptions import ValidationError
+
+if TYPE_CHECKING:
+    from .transcription_stream import TranscriptionStreamSession
 
 
 class TranscriptionService(BaseService):
@@ -207,4 +211,45 @@ class TranscriptionService(BaseService):
             await asyncio.sleep(3)
 
         raise TimeoutError(f"Transcription {job_id} did not complete within {timeout} seconds")
+
+    def stream(
+        self,
+        *,
+        language: Optional[str] = None,
+        diarize: bool = False,
+        sample_rate: int = 16000,
+        channels: int = 1,
+    ) -> "TranscriptionStreamSession":
+        """Open a real-time streaming transcription session over WebSocket.
+
+        Only available on :class:`AsyncClient`. Returns an async context manager
+        that is also an async iterator of server frames (``ready``/``partial``/
+        ``final``/``usage``/``completed``/``error``).
+
+        Streaming uses premium accuracy and is prepaid — credits are reserved up
+        front and settled to the actual duration when the session ends.
+
+        Example::
+
+            async with client.transcription.stream(language="en", diarize=True) as session:
+                await session.send_audio(pcm_bytes)   # 16-bit PCM, 16 kHz, mono
+                await session.end()
+                async for event in session:
+                    if event["type"] == "final":
+                        print(event["text"])
+        """
+        from .transcription_stream import TranscriptionStreamSession
+
+        if not self.async_mode:
+            raise ValidationError(
+                "transcription.stream() requires AsyncClient "
+                "(use `async with AsyncClient() as client`)."
+            )
+        return TranscriptionStreamSession(
+            self.client,
+            language=language,
+            diarize=diarize,
+            sample_rate=sample_rate,
+            channels=channels,
+        )
 
