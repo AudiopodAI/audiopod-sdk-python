@@ -304,14 +304,32 @@ class AudiobookService(BaseService):
         narration_speed: float = 1.0,
         narration_style: str = "narrative",
     ) -> Dict[str, Any]:
-        """Queue narration for all chapters (or ``chapter_ids``) without waiting."""
-        body: Dict[str, Any] = {"voice_id": voice_id, "narration_speed": narration_speed,
-                                "narration_style": narration_style}
+        """Queue narration for all chapters (or ``chapter_ids``) without waiting.
+
+        Posts to ``/narration/batch``. The older ``/narration/start`` route was
+        retired (PLAT-2087) because it bypassed metering entirely, and now
+        returns 410 Gone unconditionally — so every call through this method,
+        including :meth:`produce`, used to fail outright.
+
+        ``batch`` narrates the whole project when no ``chapter_ids`` are given,
+        which is what this method has always meant.
+        """
+        body: Dict[str, Any] = {
+            "voice_id": voice_id,
+            # The batch worker reads speed/style out of narration_settings under
+            # the SHORT keys "speed"/"style" — passing narration_speed /
+            # narration_style here would be accepted and then silently dropped.
+            "narration_settings": {
+                "speed": narration_speed,
+                "style": narration_style,
+            },
+        }
         if chapter_ids is not None:
             body["chapter_ids"] = chapter_ids
+        path = f"{_BASE}/projects/{project_id}/narration/batch"
         if self.async_mode:
-            return self._async_request("POST", f"{_BASE}/projects/{project_id}/narration/start", json_data=body)
-        return self.client.request("POST", f"{_BASE}/projects/{project_id}/narration/start", json_data=body)
+            return self._async_request("POST", path, json_data=body)
+        return self.client.request("POST", path, json_data=body)
 
     def narration_progress(self, project_id: str) -> Dict[str, Any]:
         """Current narration progress (``total_chapters``, ``completed_chapters``, ``failed_chapters``)."""
