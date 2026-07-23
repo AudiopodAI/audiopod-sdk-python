@@ -8,11 +8,21 @@ for the whole flow in one call, or drive each step yourself.
 """
 
 import time
-from typing import Any, Dict, List, Optional
+import warnings
+from typing import Any, Dict, List, Optional, Tuple
 
+from ..exceptions import APIError
 from .base import BaseService
 
 _BASE = "/api/v1/audiobook"
+
+# Project statuses that mean "the manuscript is not parsed yet". `draft` is a
+# project that has never been given a manuscript; `parsing` is a parse in flight
+# (a re-parse re-enters `parsing` with an old `parsing_completed_at` still set,
+# so status wins over the timestamp).
+_PARSE_PENDING_STATUSES = frozenset({"draft", "parsing", "pending", "queued"})
+# Statuses that mean the parse will never finish.
+_PARSE_FAILED_STATUSES = frozenset({"failed", "error", "canceled", "cancelled"})
 
 
 class AudiobookService(BaseService):
@@ -64,17 +74,42 @@ class AudiobookService(BaseService):
             return self._async_request("POST", f"{_BASE}/projects", json_data=body)
         return self.client.request("POST", f"{_BASE}/projects", json_data=body)
 
-    def list_projects(self, skip: int = 0, limit: int = 20) -> Dict[str, Any]:
-        """List your audiobook projects (paginated)."""
-        if self.async_mode:
-            return self._async_request("GET", f"{_BASE}/projects", params={"skip": skip, "limit": limit})
-        return self.client.request("GET", f"{_BASE}/projects", params={"skip": skip, "limit": limit})
+    def list_projects(
+        self,
+        page: int = 1,
+        per_page: int = 20,
+        skip: Optional[int] = None,
+        limit: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        List your audiobook projects (paginated).
 
-    def get_project(self, project_id: str) -> Dict[str, Any]:
-        """Get a single project."""
+        ``page`` is 1-based; ``per_page`` is capped at 100 by the API.
+
+        ``skip``/``limit`` are **deprecated** — the API has always spoken
+        ``page``/``per_page``, so the old arguments were silently dropped and
+        every caller got page 1. When supplied they are translated
+        (``page = skip // per_page + 1``) and a ``DeprecationWarning`` is raised.
+        """
+        page, per_page = self._page_params(page, per_page, skip, limit)
+        params = {"page": page, "per_page": per_page}
         if self.async_mode:
-            return self._async_request("GET", f"{_BASE}/projects/{project_id}")
-        return self.client.request("GET", f"{_BASE}/projects/{project_id}")
+            return self._async_request("GET", f"{_BASE}/projects", params=params)
+        return self.client.request("GET", f"{_BASE}/projects", params=params)
+
+    def get_project(self, project_id: str, include_chapters: bool = False) -> Dict[str, Any]:
+        """
+        Get a single project.
+
+        Pass ``include_chapters=True`` to get the project's chapters inline (a
+        ``chapters`` array) instead of a second call to :meth:`list_chapters`.
+        """
+        # Sent as a string: aiohttp rejects bool query values outright, and
+        # FastAPI parses "true" to True on the other end.
+        params = {"include_chapters": "true"} if include_chapters else None
+        if self.async_mode:
+            return self._async_request("GET", f"{_BASE}/projects/{project_id}", params=params)
+        return self.client.request("GET", f"{_BASE}/projects/{project_id}", params=params)
 
     def delete_project(self, project_id: str) -> Dict[str, Any]:
         """Delete a project."""
@@ -127,11 +162,25 @@ class AudiobookService(BaseService):
         return self.client.request("POST", f"{_BASE}/projects/{project_id}/manuscript/generate", json_data=body)
 
     # ----------------------------------------------------------------- chapters
-    def list_chapters(self, project_id: str, skip: int = 0, limit: int = 50) -> Dict[str, Any]:
-        """List chapters in a project."""
+    def list_chapters(
+        self,
+        project_id: str,
+        page: int = 1,
+        per_page: int = 50,
+        skip: Optional[int] = None,
+        limit: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        List chapters in a project (paginated).
+
+        ``page`` is 1-based; ``per_page`` is capped at 500 by the API.
+        ``skip``/``limit`` are **deprecated** — see :meth:`list_projects`.
+        """
+        page, per_page = self._page_params(page, per_page, skip, limit)
+        params = {"page": page, "per_page": per_page}
         if self.async_mode:
-            return self._async_request("GET", f"{_BASE}/projects/{project_id}/chapters", params={"skip": skip, "limit": limit})
-        return self.client.request("GET", f"{_BASE}/projects/{project_id}/chapters", params={"skip": skip, "limit": limit})
+            return self._async_request("GET", f"{_BASE}/projects/{project_id}/chapters", params=params)
+        return self.client.request("GET", f"{_BASE}/projects/{project_id}/chapters", params=params)
 
     def get_chapter(self, project_id: str, chapter_id: str) -> Dict[str, Any]:
         """Get a single chapter."""
@@ -150,6 +199,82 @@ class AudiobookService(BaseService):
         if self.async_mode:
             return self._async_request("POST", f"{_BASE}/projects/{project_id}/chapters/{chapter_id}/regenerate")
         return self.client.request("POST", f"{_BASE}/projects/{project_id}/chapters/{chapter_id}/regenerate")
+
+    # --------------------------------------------------------------- paragraphs
+    def list_paragraphs(
+        self,
+        project_id: str,
+        chapter_id: str,
+        page: Optional[int] = None,
+        per_page: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        List a chapter's paragraphs, ordered by position.
+
+        Pagination is optional: with ``page``/``per_page`` omitted the API
+        returns every paragraph in the chapter.
+        """
+        params: Dict[str, Any] = {}
+        if page is not None:
+            params["page"] = page
+        if per_page is not None:
+            params["per_page"] = per_page
+        path = f"{_BASE}/projects/{project_id}/chapters/{chapter_id}/paragraphs"
+        if self.async_mode:
+            return self._async_request("GET", path, params=params or None)
+        return self.client.request("GET", path, params=params or None)
+
+    def narrate_paragraph(self, project_id: str, paragraph_id: str, **options: Any) -> Dict[str, Any]:
+        """
+        Generate (or regenerate) audio for a single paragraph; records a take.
+
+        Options: ``voice_id``, ``text_override``, ``narration_speed``,
+        ``narration_style``, ``emotion``, ``character_name``, ``direction``.
+        Returns the queued ``task_id`` plus a ``billing`` breakdown (first take
+        billed, first regen free). Raises on 402 when credits are short and on
+        409 when the paragraph is locked.
+        """
+        body = {k: v for k, v in options.items() if v is not None}
+        path = f"{_BASE}/projects/{project_id}/paragraphs/{paragraph_id}/narrate"
+        if self.async_mode:
+            return self._async_request("POST", path, json_data=body)
+        return self.client.request("POST", path, json_data=body)
+
+    def batch_narrate(
+        self,
+        project_id: str,
+        voice_id: Optional[int] = None,
+        chapter_ids: Optional[List[str]] = None,
+        paragraph_ids: Optional[List[str]] = None,
+        include_completed: bool = False,
+        include_locked: bool = False,
+        include_skipped: bool = False,
+        narration_settings: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Queue one job that narrates the selected paragraphs sequentially.
+
+        With both ``chapter_ids`` and ``paragraph_ids`` omitted the whole
+        project is narrated. Already-completed, locked and skip-flagged
+        paragraphs are excluded unless the matching ``include_*`` flag is set.
+        Returns ``job_id``, ``total_paragraphs`` and ``skipped_paragraphs``.
+        """
+        body: Dict[str, Any] = {
+            "include_completed": include_completed,
+            "include_locked": include_locked,
+            "include_skipped": include_skipped,
+            "narration_settings": narration_settings or {},
+        }
+        if voice_id is not None:
+            body["voice_id"] = voice_id
+        if chapter_ids is not None:
+            body["chapter_ids"] = chapter_ids
+        if paragraph_ids is not None:
+            body["paragraph_ids"] = paragraph_ids
+        path = f"{_BASE}/projects/{project_id}/narration/batch"
+        if self.async_mode:
+            return self._async_request("POST", path, json_data=body)
+        return self.client.request("POST", path, json_data=body)
 
     # ------------------------------------------------------------------- voices
     def list_voices(self) -> Dict[str, Any]:
@@ -316,17 +441,104 @@ class AudiobookService(BaseService):
         return {"project_id": pid, "export_job_id": export["job_id"],
                 "compliance_check": export.get("compliance_check"), **manifest}
 
-    def _wait_for_chapters(self, project_id: str, timeout: int = 600, poll_interval: int = 3) -> List[Dict[str, Any]]:
+    # -------------------------------------------------------------- parse status
+    def wait_for_parse(self, project_id: str, timeout: int = 600, poll_interval: int = 3) -> Dict[str, Any]:
+        """
+        Block until the project's manuscript has finished parsing; returns the project.
+
+        ``/manuscript/parse`` is asynchronous and has no status endpoint of its
+        own — the project row carries the state (``status``,
+        ``parsing_completed_at``, ``error_message``). Raises
+        :class:`~audiopod.exceptions.APIError` as soon as the parse fails
+        (instead of polling on until timeout), and ``TimeoutError`` — naming the
+        last state seen — if it never settles.
+        """
+        if self.async_mode:
+            return self._async_wait_for_parse(project_id, timeout, poll_interval)
+
         start = time.time()
+        project: Dict[str, Any] = {}
         while time.time() - start < timeout:
-            data = self.client.request("GET", f"{_BASE}/projects/{project_id}/chapters", params={"skip": 0, "limit": 50})
-            chapters = data.get("chapters") or data.get("items") or (data if isinstance(data, list) else [])
-            if chapters:
-                return chapters
+            project = self.client.request("GET", f"{_BASE}/projects/{project_id}")
+            if self._parse_finished(project_id, project):
+                return project
             time.sleep(poll_interval)
-        raise TimeoutError(f"Manuscript for {project_id} did not parse within {timeout}s")
+        raise TimeoutError(self._parse_timeout_message(project_id, project, timeout))
+
+    async def _async_wait_for_parse(self, project_id: str, timeout: int, poll_interval: int) -> Dict[str, Any]:
+        import asyncio
+
+        start = time.time()
+        project: Dict[str, Any] = {}
+        while time.time() - start < timeout:
+            project = await self.client.request("GET", f"{_BASE}/projects/{project_id}")
+            if self._parse_finished(project_id, project):
+                return project
+            await asyncio.sleep(poll_interval)
+        raise TimeoutError(self._parse_timeout_message(project_id, project, timeout))
+
+    @staticmethod
+    def _parse_finished(project_id: str, project: Dict[str, Any]) -> bool:
+        """True once parsing has completed. Raises ``APIError`` if it failed."""
+        status = str(project.get("status") or "").lower()
+        error = project.get("error_message")
+        if error:
+            raise APIError(f"Manuscript parsing failed for project {project_id}: {error}")
+        if status in _PARSE_FAILED_STATUSES:
+            raise APIError(
+                f"Manuscript parsing failed for project {project_id} (status={status or 'unknown'})"
+            )
+        if status in _PARSE_PENDING_STATUSES:
+            return False
+        return project.get("parsing_completed_at") is not None
+
+    @staticmethod
+    def _parse_timeout_message(project_id: str, project: Dict[str, Any], timeout: int) -> str:
+        return (
+            f"Manuscript for {project_id} did not finish parsing within {timeout}s "
+            f"(last seen status={project.get('status') or 'unknown'}, "
+            f"parsing_completed_at={project.get('parsing_completed_at')})"
+        )
+
+    def _wait_for_chapters(self, project_id: str, timeout: int = 600, poll_interval: int = 3) -> List[Dict[str, Any]]:
+        """Wait for parsing to finish, then return the project's chapters.
+
+        Kept for backwards compatibility; :meth:`wait_for_parse` is the public
+        entry point and does the actual waiting (it fails fast on a parse error
+        instead of spinning until timeout).
+        """
+        self.wait_for_parse(project_id, timeout=timeout, poll_interval=poll_interval)
+        data = self.client.request(
+            "GET", f"{_BASE}/projects/{project_id}/chapters", params={"page": 1, "per_page": 50}
+        )
+        chapters = data.get("chapters") or data.get("items") or (data if isinstance(data, list) else [])
+        if not chapters:
+            raise APIError(f"Manuscript for {project_id} parsed but produced no chapters")
+        return chapters
 
     # ------------------------------------------------------------------- helpers
+    @staticmethod
+    def _page_params(
+        page: int, per_page: int, skip: Optional[int], limit: Optional[int]
+    ) -> Tuple[int, int]:
+        """Normalize the deprecated ``skip``/``limit`` pair onto ``page``/``per_page``."""
+        if limit is not None:
+            warnings.warn(
+                "limit= is deprecated and was never honoured by the API; use per_page=",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+            per_page = limit
+        if skip is not None:
+            warnings.warn(
+                "skip= is deprecated and was never honoured by the API; use page= "
+                "(1-based). Translating skip -> page.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+            page = (skip // per_page) + 1 if per_page else 1
+        return page, per_page
+
     def _async_request(self, method: str, path: str, **kwargs: Any):
         """Async passthrough mirroring the sync ``client.request`` (await the result)."""
         return self.client.request(method, path, **kwargs)
