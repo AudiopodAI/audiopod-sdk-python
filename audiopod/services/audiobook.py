@@ -349,13 +349,36 @@ class AudiobookService(BaseService):
         poll_interval: int = 5,
     ) -> Dict[str, Any]:
         """Narrate the project. Waits for all chapters by default."""
+        if self.async_mode:
+            return self._async_narrate(
+                project_id, voice_id, chapter_ids, narration_speed, narration_style,
+                wait_for_completion, timeout, poll_interval,
+            )
         started = self.start_narration(project_id, voice_id, chapter_ids, narration_speed, narration_style)
         if not wait_for_completion:
             return started
         return self.wait_for_narration(project_id, timeout=timeout, poll_interval=poll_interval)
 
+    async def _async_narrate(
+        self,
+        project_id: str,
+        voice_id: int,
+        chapter_ids: Optional[List[str]],
+        narration_speed: float,
+        narration_style: str,
+        wait_for_completion: bool,
+        timeout: int,
+        poll_interval: int,
+    ) -> Dict[str, Any]:
+        started = await self.start_narration(project_id, voice_id, chapter_ids, narration_speed, narration_style)
+        if not wait_for_completion:
+            return started
+        return await self._async_wait_for_narration(project_id, timeout, poll_interval)
+
     def wait_for_narration(self, project_id: str, timeout: int = 1800, poll_interval: int = 5) -> Dict[str, Any]:
         """Block until narration finishes (``completed + failed >= total``)."""
+        if self.async_mode:
+            return self._async_wait_for_narration(project_id, timeout, poll_interval)
         start = time.time()
         while time.time() - start < timeout:
             p = self.client.request("GET", f"{_BASE}/projects/{project_id}/narration/progress")
@@ -363,6 +386,18 @@ class AudiobookService(BaseService):
             if total and p.get("completed_chapters", 0) + p.get("failed_chapters", 0) >= total:
                 return p
             time.sleep(poll_interval)
+        raise TimeoutError(f"Narration for {project_id} did not finish within {timeout}s")
+
+    async def _async_wait_for_narration(self, project_id: str, timeout: int, poll_interval: int) -> Dict[str, Any]:
+        import asyncio
+
+        start = time.time()
+        while time.time() - start < timeout:
+            p = await self.client.request("GET", f"{_BASE}/projects/{project_id}/narration/progress")
+            total = p.get("total_chapters", 0)
+            if total and p.get("completed_chapters", 0) + p.get("failed_chapters", 0) >= total:
+                return p
+            await asyncio.sleep(poll_interval)
         raise TimeoutError(f"Narration for {project_id} did not finish within {timeout}s")
 
     # -------------------------------------------------------------------- export
@@ -390,6 +425,8 @@ class AudiobookService(BaseService):
         poll_interval: int = 5,
     ) -> Dict[str, Any]:
         """Export an ACX package. Waits for completion by default; returns the export job (with ``job_id``)."""
+        if self.async_mode:
+            return self._async_export(project_id, include_chapters, wait_for_completion, timeout, poll_interval)
         started = self.start_export(project_id, include_chapters)
         job_id = started.get("job_id")
         if not wait_for_completion or job_id is None:
@@ -397,8 +434,25 @@ class AudiobookService(BaseService):
         self.wait_for_export(project_id, job_id, timeout=timeout, poll_interval=poll_interval)
         return started
 
+    async def _async_export(
+        self,
+        project_id: str,
+        include_chapters: Optional[List[str]],
+        wait_for_completion: bool,
+        timeout: int,
+        poll_interval: int,
+    ) -> Dict[str, Any]:
+        started = await self.start_export(project_id, include_chapters)
+        job_id = started.get("job_id")
+        if not wait_for_completion or job_id is None:
+            return started
+        await self._async_wait_for_export(project_id, job_id, timeout, poll_interval)
+        return started
+
     def wait_for_export(self, project_id: str, job_id: int, timeout: int = 600, poll_interval: int = 5) -> Dict[str, Any]:
         """Block until an export job reaches ``COMPLETED`` (raises on failure)."""
+        if self.async_mode:
+            return self._async_wait_for_export(project_id, job_id, timeout, poll_interval)
         start = time.time()
         while time.time() - start < timeout:
             s = self.client.request("GET", f"{_BASE}/projects/{project_id}/export/{job_id}/status")
@@ -408,6 +462,20 @@ class AudiobookService(BaseService):
             if status in ("FAILED", "ERROR"):
                 raise Exception(f"Export {job_id} failed: {s.get('error') or s}")
             time.sleep(poll_interval)
+        raise TimeoutError(f"Export {job_id} did not finish within {timeout}s")
+
+    async def _async_wait_for_export(self, project_id: str, job_id: int, timeout: int, poll_interval: int) -> Dict[str, Any]:
+        import asyncio
+
+        start = time.time()
+        while time.time() - start < timeout:
+            s = await self.client.request("GET", f"{_BASE}/projects/{project_id}/export/{job_id}/status")
+            status = str(s.get("status", "")).upper()
+            if status in ("COMPLETED", "SUCCESS", "DONE"):
+                return s
+            if status in ("FAILED", "ERROR"):
+                raise Exception(f"Export {job_id} failed: {s.get('error') or s}")
+            await asyncio.sleep(poll_interval)
         raise TimeoutError(f"Export {job_id} did not finish within {timeout}s")
 
     def download(self, project_id: str, job_id: int) -> Dict[str, Any]:
@@ -439,6 +507,12 @@ class AudiobookService(BaseService):
         if not file and not text:
             raise ValueError("Provide either file= or text=")
 
+        if self.async_mode:
+            return self._async_produce(
+                title, voice_id, file, text, author,
+                narration_speed, narration_style, timeout, poll_interval,
+            )
+
         project = self.create_project(title=title, author=author)
         pid = project["id"]
 
@@ -456,6 +530,39 @@ class AudiobookService(BaseService):
                      timeout=timeout, poll_interval=poll_interval)
         export = self.export(pid, wait_for_completion=True, timeout=timeout, poll_interval=poll_interval)
         manifest = self.download(pid, export["job_id"])
+        return {"project_id": pid, "export_job_id": export["job_id"],
+                "compliance_check": export.get("compliance_check"), **manifest}
+
+    async def _async_produce(
+        self,
+        title: str,
+        voice_id: int,
+        file: Optional[str],
+        text: Optional[str],
+        author: Optional[str],
+        narration_speed: float,
+        narration_style: str,
+        timeout: int,
+        poll_interval: int,
+    ) -> Dict[str, Any]:
+        project = await self.create_project(title=title, author=author)
+        pid = project["id"]
+
+        if file:
+            up = await self.upload_manuscript(pid, file=file)
+            filename = file.split("/")[-1]
+            await self.parse_manuscript(pid, up["file_key"], filename)
+            await self._async_wait_for_chapters(pid, timeout=timeout, poll_interval=poll_interval)
+        else:
+            await self.paste_text(pid, text=text)
+            await self._async_wait_for_chapters(pid, timeout=timeout, poll_interval=poll_interval)
+
+        await self._async_narrate(
+            pid, voice_id, None, narration_speed, narration_style,
+            True, timeout, poll_interval,
+        )
+        export = await self._async_export(pid, None, True, timeout, poll_interval)
+        manifest = await self.download(pid, export["job_id"])
         return {"project_id": pid, "export_job_id": export["job_id"],
                 "compliance_check": export.get("compliance_check"), **manifest}
 
@@ -525,8 +632,21 @@ class AudiobookService(BaseService):
         entry point and does the actual waiting (it fails fast on a parse error
         instead of spinning until timeout).
         """
+        if self.async_mode:
+            return self._async_wait_for_chapters(project_id, timeout, poll_interval)
         self.wait_for_parse(project_id, timeout=timeout, poll_interval=poll_interval)
         data = self.client.request(
+            "GET", f"{_BASE}/projects/{project_id}/chapters", params={"page": 1, "per_page": 50}
+        )
+        chapters = data.get("chapters") or data.get("items") or (data if isinstance(data, list) else [])
+        if not chapters:
+            raise APIError(f"Manuscript for {project_id} parsed but produced no chapters")
+        return chapters
+
+    async def _async_wait_for_chapters(self, project_id: str, timeout: int, poll_interval: int) -> List[Dict[str, Any]]:
+        # wait_for_parse returns a coroutine in async mode (via its own branch).
+        await self.wait_for_parse(project_id, timeout=timeout, poll_interval=poll_interval)
+        data = await self.client.request(
             "GET", f"{_BASE}/projects/{project_id}/chapters", params={"page": 1, "per_page": 50}
         )
         chapters = data.get("chapters") or data.get("items") or (data if isinstance(data, list) else [])
