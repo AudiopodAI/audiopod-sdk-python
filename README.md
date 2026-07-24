@@ -98,6 +98,23 @@ for stem, url in job["download_urls"].items():
     print(f"{stem}: {url}")
 ```
 
+## Audio to MIDI
+
+Convert a mix — or stems you already separated — into MIDI. It's a
+starting-point transcription: drums aren't transcribed yet, dynamics are
+approximate, and it works best on clean recordings.
+
+```python
+# Standalone: split + transcribe in one call
+job = client.midi.convert(file="song.mp3", stems=["vocals", "bass", "piano"])
+print(job["merged_midi_url"])
+
+# Add-on: transcribe stems you already separated (bills the add-on rate only)
+job = client.midi.convert_from_stem_job(stem_job_id=job["id"])
+for stem, url in (job["midi_urls"] or {}).items():
+    print(f"{stem}: {url}")
+```
+
 ## Transcription
 
 ```python
