@@ -8,8 +8,11 @@ API Routes:
 - DELETE /api/v1/voice/voices/{id}            - Delete voice
 - POST /api/v1/voice/voices/{id}/generate     - Generate TTS
 - GET  /api/v1/voice/tts-jobs/{id}/status     - Get TTS job status
+- POST /api/v1/voice/design                   - Design a voice from a text prompt
+- POST /api/v1/voice/design/publish           - Publish a designed voice preview
 """
 
+import json
 from typing import Optional, Dict, Any, List, Union
 from .base import BaseService
 
@@ -78,33 +81,42 @@ class VoiceService(BaseService):
         voice_id: Union[int, str],
         text: str,
         speed: float = 1.0,
-        language: str = "en",
+        language: Optional[str] = "en",
         audio_format: str = "mp3",
+        generation_params: Optional[Dict[str, Any]] = None,
         wait_for_completion: bool = False,
         timeout: int = 300,
     ) -> Dict[str, Any]:
         """
         Generate speech from text using a voice.
-        
+
         Args:
             voice_id: Voice ID (int) or UUID (str) to use for generation
             text: Text to convert to speech
             speed: Speech speed (0.25 to 4.0, default 1.0)
-            language: Language code (default "en")
+            language: Language code (default "en"). Pass None to auto-detect.
             audio_format: Output format - mp3, wav, ogg (default "mp3")
+            generation_params: Optional voice-directing controls, sent as a JSON
+                object. Recognized keys:
+                - "delivery_mode": one of "stable", "balanced", "creative"
+                - "timestamp_type": one of "word", "character"
+                - "text_normalization": bool
             wait_for_completion: If True, poll until job completes
             timeout: Max seconds to wait for completion
-            
+
         Returns:
             Job info dict with job_id, status, etc.
             If wait_for_completion=True, includes output_url when done.
         """
-        data = {
+        data: Dict[str, Any] = {
             "input_text": text,
             "speed": speed,
-            "language": language,
             "audio_format": audio_format,
         }
+        if language is not None:
+            data["language"] = language
+        if generation_params is not None:
+            data["generation_params"] = json.dumps(generation_params)
 
         if self.async_mode:
             return self._async_generate_speech(voice_id, data, wait_for_completion, timeout)
@@ -172,16 +184,80 @@ class VoiceService(BaseService):
         import asyncio
         import time
         start_time = time.time()
-        
+
         while time.time() - start_time < timeout:
             status = await self.get_job_status(job_id)
-            
+
             if status.get("status") in ("completed", "COMPLETED"):
                 return status
             elif status.get("status") in ("failed", "FAILED", "error", "ERROR"):
                 raise Exception(f"Job failed: {status.get('error_message', 'Unknown error')}")
-            
+
             await asyncio.sleep(2)
-        
+
         raise TimeoutError(f"Job {job_id} did not complete within {timeout} seconds")
+
+    # ------------------------------------------------------------- voice design
+    def design(
+        self,
+        design_prompt: str,
+        language: Optional[str] = None,
+        preview_text: Optional[str] = None,
+        num_samples: int = 3,
+    ) -> Dict[str, Any]:
+        """
+        Design a brand-new voice from a text description.
+
+        Returns a set of candidate previews; publish the one you like with
+        :meth:`publish_design`.
+
+        Args:
+            design_prompt: Description of the voice to create (required).
+            language: Optional language code for the previews.
+            preview_text: Text spoken in the previews. If omitted, a default
+                preview line is used.
+            num_samples: How many candidate previews to generate. Default: 3
+
+        Returns:
+            Dict with ``previews`` (each has a ``preview_id``) and
+            ``credits_charged``.
+        """
+        body: Dict[str, Any] = {"design_prompt": design_prompt, "num_samples": num_samples}
+        if language is not None:
+            body["language"] = language
+        if preview_text is not None:
+            body["preview_text"] = preview_text
+        if self.async_mode:
+            return self._async_design(body)
+        return self.client.request("POST", "/api/v1/voice/design", json_data=body)
+
+    async def _async_design(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        return await self.client.request("POST", "/api/v1/voice/design", json_data=body)
+
+    def publish_design(
+        self,
+        preview_id: str,
+        name: str,
+        description: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Publish a designed voice preview as a saved, reusable voice.
+
+        Args:
+            preview_id: The ``preview_id`` of the design preview to keep (required).
+            name: Name for the new voice (required).
+            description: Optional description for the voice.
+
+        Returns:
+            The published voice dict.
+        """
+        body: Dict[str, Any] = {"preview_id": preview_id, "name": name}
+        if description is not None:
+            body["description"] = description
+        if self.async_mode:
+            return self._async_publish_design(body)
+        return self.client.request("POST", "/api/v1/voice/design/publish", json_data=body)
+
+    async def _async_publish_design(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        return await self.client.request("POST", "/api/v1/voice/design/publish", json_data=body)
 

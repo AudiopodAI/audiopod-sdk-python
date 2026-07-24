@@ -27,6 +27,8 @@ MusicTask = Literal[
     "cover", "repaint", "extract", "complete", "simple", "retake", "extend", "edit",
 ]
 
+MusicQuality = Literal["standard", "premium"]
+
 
 class MusicService(BaseService):
     """Service for AI music generation using AudioMusic V2."""
@@ -39,6 +41,7 @@ class MusicService(BaseService):
         lyrics: Optional[str] = None,
         genre_preset: Optional[str] = None,
         display_name: Optional[str] = None,
+        quality: Optional[MusicQuality] = None,
         wait_for_completion: bool = False,
         timeout: int = 600,
         **kwargs,
@@ -58,6 +61,7 @@ class MusicService(BaseService):
             lyrics: Lyrics for vocal tasks (with [verse], [chorus] tags)
             genre_preset: Genre preset name
             display_name: Custom name for the job
+            quality: Generation quality tier - "standard" or "premium"
             wait_for_completion: Wait for completion
             timeout: Max wait time in seconds
             **kwargs: AudioMusic V2 advanced parameters:
@@ -95,6 +99,8 @@ class MusicService(BaseService):
             data["genre_preset"] = genre_preset
         if display_name:
             data["display_name"] = display_name
+        if quality is not None:
+            data["quality"] = quality
 
         # Pass through AudioMusic V2 advanced parameters
         v2_params = [
@@ -135,6 +141,7 @@ class MusicService(BaseService):
         self,
         prompt: str,
         duration: int = 30,
+        quality: Optional[MusicQuality] = None,
         wait_for_completion: bool = False,
         timeout: int = 600,
         **kwargs,
@@ -144,6 +151,7 @@ class MusicService(BaseService):
             prompt=prompt,
             task="prompt2instrumental",
             duration=duration,
+            quality=quality,
             wait_for_completion=wait_for_completion,
             timeout=timeout,
             **kwargs,
@@ -154,6 +162,7 @@ class MusicService(BaseService):
         prompt: str,
         lyrics: str,
         duration: int = 60,
+        quality: Optional[MusicQuality] = None,
         wait_for_completion: bool = False,
         timeout: int = 600,
         **kwargs,
@@ -164,6 +173,7 @@ class MusicService(BaseService):
             task="text2music",
             lyrics=lyrics,
             duration=duration,
+            quality=quality,
             wait_for_completion=wait_for_completion,
             timeout=timeout,
             **kwargs,
@@ -174,6 +184,7 @@ class MusicService(BaseService):
         prompt: str,
         lyrics: str,
         duration: int = 60,
+        quality: Optional[MusicQuality] = None,
         wait_for_completion: bool = False,
         timeout: int = 600,
         **kwargs,
@@ -184,6 +195,7 @@ class MusicService(BaseService):
             task="text2rap",
             lyrics=lyrics,
             duration=duration,
+            quality=quality,
             wait_for_completion=wait_for_completion,
             timeout=timeout,
             **kwargs,
@@ -197,6 +209,7 @@ class MusicService(BaseService):
         display_name: Optional[str] = None,
         duration: int = -1,
         format: str = "flac",
+        quality: Optional[MusicQuality] = None,
         wait_for_completion: bool = False,
         timeout: int = 600,
     ) -> Dict[str, Any]:
@@ -211,6 +224,7 @@ class MusicService(BaseService):
             display_name: Custom name for the track
             duration: Duration in seconds (-1 for auto). Default: -1
             format: Output format. Default: "flac"
+            quality: Generation quality tier - "standard" or "premium"
             wait_for_completion: Wait for completion
             timeout: Max wait time in seconds
 
@@ -226,6 +240,8 @@ class MusicService(BaseService):
         }
         if display_name:
             data["display_name"] = display_name
+        if quality is not None:
+            data["quality"] = quality
 
         endpoint = "/api/v1/music/simple"
 
@@ -247,6 +263,7 @@ class MusicService(BaseService):
         display_name: Optional[str] = None,
         duration: int = -1,
         format: str = "flac",
+        quality: Optional[MusicQuality] = None,
         wait_for_completion: bool = False,
         timeout: int = 600,
     ) -> Dict[str, Any]:
@@ -262,6 +279,7 @@ class MusicService(BaseService):
             display_name: Custom name for the track
             duration: Duration in seconds (-1 for auto). Default: -1
             format: Output format. Default: "flac"
+            quality: Generation quality tier - "standard" or "premium"
             wait_for_completion: Wait for completion
             timeout: Max wait time in seconds
 
@@ -279,6 +297,8 @@ class MusicService(BaseService):
             data["lyrics"] = lyrics
         if display_name:
             data["display_name"] = display_name
+        if quality is not None:
+            data["quality"] = quality
 
         endpoint = "/api/v1/music/cover"
 
@@ -300,6 +320,7 @@ class MusicService(BaseService):
         display_name: Optional[str] = None,
         duration: int = -1,
         format: str = "flac",
+        quality: Optional[MusicQuality] = None,
         wait_for_completion: bool = False,
         timeout: int = 600,
     ) -> Dict[str, Any]:
@@ -315,6 +336,7 @@ class MusicService(BaseService):
             display_name: Custom name for the track
             duration: Duration in seconds (-1 for auto). Default: -1
             format: Output format. Default: "flac"
+            quality: Generation quality tier - "standard" or "premium"
             wait_for_completion: Wait for completion
             timeout: Max wait time in seconds
 
@@ -332,6 +354,8 @@ class MusicService(BaseService):
             data["lyrics"] = lyrics
         if display_name:
             data["display_name"] = display_name
+        if quality is not None:
+            data["quality"] = quality
 
         endpoint = "/api/v1/music/reference"
 
