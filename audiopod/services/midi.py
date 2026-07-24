@@ -13,12 +13,14 @@ class MidiService(BaseService):
     Service for converting audio into MIDI, either standalone (we split the
     mix into stems first) or as an add-on to an existing stem-separation job.
 
-    AudioPod's audio-to-MIDI engine transcribes pitched stems (vocals, bass,
-    guitar, piano, other) into note-level MIDI. It's a starting-point
-    transcription — expect to tidy timing/note lengths by ear, dynamics are
-    approximate, and it works best on clean recordings. Drums are accepted as
-    a requested stem but aren't transcribed yet; they come back in
-    `skipped_stems`.
+    AudioPod's audio-to-MIDI engine transcribes bass, vocals, and piano into
+    note-level MIDI — bass is the strongest instrument. Guitar is supported
+    too but is opt-in/experimental (it over-detects on busy mixes, so it's
+    not requested by default). It's a starting-point transcription — expect
+    to tidy timing/note lengths by ear in your DAW, dynamics are
+    approximate, and it works best on clean recordings. Drums and "other"
+    are accepted as a requested stem but aren't transcribed; they come back
+    in `skipped_stems`. Detected tempo is surfaced as `detected_tempo_bpm`.
 
     Example:
         ```python
@@ -26,8 +28,8 @@ class MidiService(BaseService):
 
         client = Client()
 
-        # Standalone: split + transcribe in one call
-        job = client.midi.convert(file="song.mp3", stems=["vocals", "bass", "piano"])
+        # Standalone: split + transcribe in one call (default stems: bass, vocals, piano)
+        job = client.midi.convert(file="song.mp3")
         print(job["merged_midi_url"])
         for stem, url in (job["midi_urls"] or {}).items():
             print(f"{stem}: {url}")
@@ -53,12 +55,14 @@ class MidiService(BaseService):
         Args:
             file: Path to local audio file
             url: URL of audio/video to convert (alternative to file)
-            stems: Stems to transcribe, e.g. ["vocals", "bass", "guitar", "piano", "other"].
-                Defaults to all pitched stems server-side. "drums" is accepted
-                but reported back in `skipped_stems` — not transcribed yet.
+            stems: Stems to transcribe. Defaults to ["bass", "vocals", "piano"]
+                server-side when omitted. "guitar" is supported but
+                opt-in/experimental — pass it explicitly (over-detects on
+                busy mixes). "drums" and "other" are accepted but always
+                come back in `skipped_stems` — not transcribed.
             options: Tunables forwarded to the audio-to-MIDI engine
                 (onset_threshold, frame_threshold, min_note_len_ms,
-                use_piano_model, tempo_bpm).
+                tempo_bpm).
             wait_for_completion: Wait for job to complete (default: True)
             timeout: Max wait time in seconds
 
@@ -121,8 +125,12 @@ class MidiService(BaseService):
         Args:
             stem_job_id: ID of a completed `client.stem_extraction` job
             stems: Subset of the source job's stems to transcribe. Defaults to
-                all stems the source job produced.
-            options: Tunables forwarded to the audio-to-MIDI engine.
+                all stems the source job produced — drums and "other" are
+                accepted but always come back in `skipped_stems`; "guitar"
+                is opt-in/experimental (over-detects on busy mixes).
+            options: Tunables forwarded to the audio-to-MIDI engine
+                (onset_threshold, frame_threshold, min_note_len_ms,
+                tempo_bpm).
             wait_for_completion: Wait for job to complete (default: True)
             timeout: Max wait time in seconds
 
