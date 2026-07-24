@@ -215,7 +215,7 @@ class MusicService(BaseService):
     ) -> Dict[str, Any]:
         """
         Generate music from a simple natural language query using AudioMusic V2's Simple Mode.
-        The 4B Language Model auto-generates caption, lyrics, BPM, key, time signature, and duration.
+        AudioMusic auto-generates caption, lyrics, BPM, key, time signature, and duration.
 
         Args:
             query: Natural language description (e.g. "a soft Bengali love song for a quiet evening")
@@ -374,7 +374,7 @@ class MusicService(BaseService):
         temperature: float = 0.85,
     ) -> Dict[str, Any]:
         """
-        Analyze audio to extract metadata using AudioMusic V2's 4B Language Model.
+        Analyze audio to extract metadata using AudioMusic V2.
 
         Extracts: caption, lyrics, BPM, key/scale, time signature, duration, language.
 
