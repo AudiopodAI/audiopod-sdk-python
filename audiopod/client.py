@@ -27,6 +27,8 @@ from .services import (
     VideoService,
     AudiobookService,
     MidiService,
+    PodcastService,
+    ReaderService,
 )
 
 logger = logging.getLogger(__name__)
@@ -164,6 +166,8 @@ class Client(BaseClient):
         self.video = VideoService(self)
         self.audiobook = AudiobookService(self)
         self.midi = MidiService(self)
+        self.podcast = PodcastService(self)
+        self.reader = ReaderService(self)
 
     def request(
         self,
@@ -245,6 +249,8 @@ class AsyncClient(BaseClient):
         self.video = VideoService(self, async_mode=True)
         self.audiobook = AudiobookService(self, async_mode=True)
         self.midi = MidiService(self, async_mode=True)
+        self.podcast = PodcastService(self, async_mode=True)
+        self.reader = ReaderService(self, async_mode=True)
 
     @property
     def session(self) -> aiohttp.ClientSession:

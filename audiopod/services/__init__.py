@@ -16,6 +16,8 @@ from .wallet import WalletService
 from .video import VideoService
 from .audiobook import AudiobookService
 from .midi import MidiService
+from .podcast import PodcastService
+from .reader import ReaderService
 
 __all__ = [
     "BaseService",
@@ -32,5 +34,7 @@ __all__ = [
     "VideoService",
     "AudiobookService",
     "MidiService",
+    "PodcastService",
+    "ReaderService",
 ]
 

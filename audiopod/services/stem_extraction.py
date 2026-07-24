@@ -2,9 +2,20 @@
 Stem Extraction Service - Audio stem separation
 """
 
-from typing import List, Optional, Dict, Any, Literal
+import json
+from typing import List, Optional, Dict, Any, Literal, Union
 from .base import BaseService
 from ..exceptions import ValidationError
+
+
+def _stems_to_form(value: Union[List[str], str, None]) -> Optional[str]:
+    """Serialize a list of stem names to the JSON-array string the advanced
+    endpoint expects; pass a string through unchanged."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    return json.dumps(list(value))
 
 
 # Valid separation modes for the new API
@@ -145,6 +156,117 @@ class StemExtractionService(BaseService):
 
     async def _async_modes(self) -> Dict[str, Any]:
         return await self.client.request("GET", "/api/v1/stem-extraction/modes")
+
+    def extract_advanced(
+        self,
+        file: Optional[str] = None,
+        url: Optional[str] = None,
+        method: str = "hierarchical",
+        package: Optional[str] = None,
+        target_stems: Union[List[str], str, None] = None,
+        exclude_stems: Union[List[str], str, None] = None,
+        two_stems_mode: Optional[str] = None,
+        target_instrument: Optional[str] = None,
+        single_stem: Optional[str] = None,
+        multi_stem_count: Optional[int] = None,
+        custom_stems: Union[List[str], str, None] = None,
+        wait_for_completion: bool = True,
+        timeout: int = 900,
+    ) -> Dict[str, Any]:
+        """
+        Advanced stem separation over the full instrument catalog.
+
+        This endpoint is multipart/form-data. Provide either ``file`` or ``url``.
+        Pick exactly one selection strategy: ``package`` (a named preset), a
+        single ``single_stem``, a ``multi_stem_count``, or an explicit
+        ``custom_stems`` list. Use ``target_stems`` / ``exclude_stems`` to keep
+        or drop specific instruments.
+
+        Args:
+            file: Path to a local audio file.
+            url: URL of audio/video (alternative to ``file``).
+            method: Extraction method. Default: "hierarchical".
+            package: Named catalog package to run.
+            target_stems: Instruments to isolate (list or JSON-array string).
+            exclude_stems: Instruments to remove (list or JSON-array string).
+            two_stems_mode: Two-stem split mode.
+            target_instrument: Instrument to isolate (isolation package).
+            single_stem: Extract a single named stem.
+            multi_stem_count: Number of stems for a multi-stem split.
+            custom_stems: Explicit list of stems (list or JSON-array string).
+            wait_for_completion: Wait for the job to complete (default: True).
+            timeout: Max wait time in seconds.
+
+        Returns:
+            Job dict with id, status, download_urls (when completed).
+        """
+        if not file and not url:
+            raise ValidationError("Provide file or url")
+        if file and url:
+            raise ValidationError("Provide file or url, not both")
+
+        data: Dict[str, Any] = {"method": method}
+        optional = {
+            "package": package,
+            "target_stems": _stems_to_form(target_stems),
+            "exclude_stems": _stems_to_form(exclude_stems),
+            "two_stems_mode": two_stems_mode,
+            "target_instrument": target_instrument,
+            "single_stem": single_stem,
+            "multi_stem_count": multi_stem_count,
+            "custom_stems": _stems_to_form(custom_stems),
+        }
+        for k, v in optional.items():
+            if v is not None:
+                data[k] = v
+        if url:
+            data["url"] = url
+
+        files = self._prepare_file_upload(file, "file") if file else None
+
+        if self.async_mode:
+            return self._async_extract_advanced(data, files, wait_for_completion, timeout)
+
+        response = self.client.request(
+            "POST", "/api/v1/stem-extraction/extract/advanced", data=data, files=files
+        )
+        if wait_for_completion:
+            job_id = response.get("id") or response.get("job_id")
+            return self._wait_for_stem_job(job_id, timeout)
+        return response
+
+    async def _async_extract_advanced(
+        self,
+        data: Dict[str, Any],
+        files: Optional[Dict[str, Any]],
+        wait_for_completion: bool,
+        timeout: int,
+    ) -> Dict[str, Any]:
+        response = await self.client.request(
+            "POST", "/api/v1/stem-extraction/extract/advanced", data=data, files=files
+        )
+        if wait_for_completion:
+            job_id = response.get("id") or response.get("job_id")
+            return await self._async_wait_for_stem_job(job_id, timeout)
+        return response
+
+    def catalog(self) -> Dict[str, Any]:
+        """Get the full instrument/stem catalog."""
+        if self.async_mode:
+            return self._async_catalog()
+        return self.client.request("GET", "/api/v1/stem-extraction/catalog")
+
+    async def _async_catalog(self) -> Dict[str, Any]:
+        return await self.client.request("GET", "/api/v1/stem-extraction/catalog")
+
+    def available_packages(self) -> Dict[str, Any]:
+        """Get the stem packages available to the current plan."""
+        if self.async_mode:
+            return self._async_available_packages()
+        return self.client.request("GET", "/api/v1/stem-extraction/packages/available")
+
+    async def _async_available_packages(self) -> Dict[str, Any]:
+        return await self.client.request("GET", "/api/v1/stem-extraction/packages/available")
 
     # Legacy method - kept for backward compatibility
     def extract_stems(
