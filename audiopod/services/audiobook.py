@@ -276,6 +276,28 @@ class AudiobookService(BaseService):
             return self._async_request("POST", path, json_data=body)
         return self.client.request("POST", path, json_data=body)
 
+    def cancel_narration(self, project_id: str) -> Dict[str, Any]:
+        """
+        Abort the project's running narration batch.
+
+        Cancellation is resume-not-restart: paragraphs that already have audio
+        are left untouched, and only the un-narrated paragraphs are returned to
+        a runnable state so a later ``batch_narrate`` picks up where this left
+        off. Charges for the undelivered paragraphs are released.
+
+        Returns ``job_id``, ``status`` (``"cancelled"``), ``paragraphs_kept``,
+        ``paragraphs_reset``, ``billing_released`` and ``project_status``.
+
+        If nothing is running (for example a prior cancel already succeeded)
+        the call is idempotent and raises :class:`~audiopod.exceptions.APIError`
+        with ``status_code`` 404 and error code ``no_narration_running`` — that
+        is the "nothing left to stop" case, not a failure.
+        """
+        path = f"{_BASE}/projects/{project_id}/narration/cancel"
+        if self.async_mode:
+            return self._async_request("POST", path)
+        return self.client.request("POST", path)
+
     # ------------------------------------------------------------------- voices
     def list_voices(self) -> Dict[str, Any]:
         """List narration voices (``available_voices``, ``recommended_voices``, ``user_custom_voices``)."""
