@@ -274,6 +274,37 @@ class AsyncClient(BaseClient):
         """Make async API request."""
         url = urljoin(self.config.base_url, endpoint)
 
+        if files:
+            # aiohttp has no requests-style ``files=``; build a multipart body via
+            # FormData. The session default header is Content-Type: application/json,
+            # so we must override it per-request with the multipart content type
+            # (including the generated boundary) — otherwise the body is sent as
+            # JSON and the uploaded binary is silently dropped.
+            form = aiohttp.FormData()
+            for key, value in (data or {}).items():
+                if value is None:
+                    continue
+                form.add_field(key, str(value))
+            for field, spec in files.items():
+                if isinstance(spec, (tuple, list)):
+                    filename = spec[0]
+                    content = spec[1]
+                    content_type = spec[2] if len(spec) > 2 else None
+                    form.add_field(
+                        field, content, filename=filename, content_type=content_type
+                    )
+                else:
+                    form.add_field(field, spec)
+            payload = form()
+            async with self.session.request(
+                method=method,
+                url=url,
+                data=payload,
+                params=params,
+                headers={"Content-Type": payload.content_type},
+            ) as response:
+                return await self._handle_async_response(response)
+
         async with self.session.request(
             method=method,
             url=url,

@@ -274,7 +274,7 @@ class StemExtractionService(BaseService):
         audio_file: Optional[str] = None,
         url: Optional[str] = None,
         stem_types: Optional[List[str]] = None,
-        model_name: str = "htdemucs",
+        model_name: str = "standard",
         two_stems_mode: Optional[str] = None,
         wait_for_completion: bool = False,
         timeout: int = 900,
@@ -288,7 +288,9 @@ class StemExtractionService(BaseService):
             audio_file: Path to local audio file
             url: URL of audio file (alternative to audio_file)
             stem_types: Stems to extract (e.g., ["vocals", "drums", "bass", "other"])
-            model_name: Model to use ("htdemucs" or "htdemucs_6s")
+            model_name: Stem model — "standard" (default) or "detailed"
+                (adds piano + guitar). Legacy method; prefer separate() or
+                extract_advanced() for the full instrument catalog.
             two_stems_mode: Two-stem mode ("vocals", "drums", or "bass")
             wait_for_completion: Wait for job to complete
             timeout: Max wait time in seconds
@@ -302,14 +304,24 @@ class StemExtractionService(BaseService):
         if audio_file and url:
             raise ValidationError("Provide audio_file or url, not both")
 
+        # Map friendly names to the internal engine identifier; raw values pass
+        # through unchanged for backward compatibility.
+        _MODEL_ALIASES = {
+            "standard": "htdemucs",
+            "detailed": "htdemucs_6s",
+            "6-stem": "htdemucs_6s",
+        }
+        resolved_model = _MODEL_ALIASES.get(model_name, model_name)
+        is_six_stem = resolved_model == "htdemucs_6s"
+
         if stem_types is None:
             stem_types = (
                 ["vocals", "drums", "bass", "other", "piano", "guitar"]
-                if model_name == "htdemucs_6s"
+                if is_six_stem
                 else ["vocals", "drums", "bass", "other"]
             )
 
-        data = {"stem_types": str(stem_types), "model_name": model_name}
+        data = {"stem_types": str(stem_types), "model_name": resolved_model}
 
         if url:
             data["url"] = url
