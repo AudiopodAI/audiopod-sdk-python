@@ -58,7 +58,17 @@ class BaseClient:
             debug: Enable debug logging.
         """
         if debug:
-            logging.basicConfig(level=logging.DEBUG)
+            # Security audit F8: scope debug logging to the "audiopod" logger
+            # instead of the root logger, and hold the HTTP transport libraries
+            # (which can echo the Authorization / X-API-Key request headers) at
+            # WARNING. Previously `logging.basicConfig(level=DEBUG)` turned on
+            # root DEBUG for the whole host application, which could surface the
+            # API key via urllib3 / http.client wire logs.
+            logging.getLogger("audiopod").setLevel(logging.DEBUG)
+            if not logging.getLogger().handlers:
+                logging.basicConfig(level=logging.INFO)
+            for _noisy in ("urllib3", "requests", "http.client", "aiohttp"):
+                logging.getLogger(_noisy).setLevel(logging.WARNING)
 
         self.api_key = api_key or os.getenv("AUDIOPOD_API_KEY")
         if not self.api_key:
