@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "audiopod"
-version = "2.8.2"
+version = "2.9.0"
 description = "AudioPod SDK + CLI for Python - Professional Audio Processing powered by AI"
 readme = "README.md"
 license = {text = "MIT"}
