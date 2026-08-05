@@ -125,11 +125,43 @@ class AudiobookService(BaseService):
             return self._async_request("POST", f"{_BASE}/projects/{project_id}/manuscript/upload", files=files)
         return self.client.request("POST", f"{_BASE}/projects/{project_id}/manuscript/upload", files=files)
 
-    def parse_manuscript(self, project_id: str, file_key: str, filename: str) -> Dict[str, Any]:
-        """Parse an uploaded manuscript into chapters (async; returns a parse ``job_id``)."""
+    def parse_manuscript(
+        self,
+        project_id: str,
+        file_key: str,
+        filename: str,
+        force: Optional[bool] = None,
+        auto_direction: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """Parse an uploaded manuscript into chapters (async; returns a parse ``job_id``).
+
+        ``force`` re-parses a project that already has chapters. Destructive:
+        existing chapters and paragraphs are replaced.
+
+        ``auto_direction`` runs :meth:`auto_direct` automatically once parsing
+        finishes, so the book narrates expressively without a second call. It
+        defaults to **off for API-key callers** (this SDK) so an integration's
+        narration does not change without asking — pass ``True`` to opt in.
+
+        Both are tri-state: ``None`` (the default) omits the field entirely,
+        which is NOT the same as ``False``. Absent means "use the default for my
+        auth method"; ``auto_direction=False`` is an explicit "parse but leave
+        my directions alone".
+        """
         # The endpoint takes form fields (not JSON); send them as multipart
         # fields via (None, value) tuples so the client emits multipart/form-data.
-        files = {"file_key": (None, file_key), "filename": (None, filename)}
+        files: Dict[str, Any] = {
+            "file_key": (None, file_key),
+            "filename": (None, filename),
+        }
+        # Form fields are strings on the wire. Lower-case "true"/"false" is the
+        # canonical spelling the API reference documents; the server also
+        # accepts other casings and "1"/"yes"/"on", but sending the documented
+        # form keeps the request identical to the one in the docs.
+        if force is not None:
+            files["force"] = (None, "true" if force else "false")
+        if auto_direction is not None:
+            files["auto_direction"] = (None, "true" if auto_direction else "false")
         if self.async_mode:
             return self._async_request("POST", f"{_BASE}/projects/{project_id}/manuscript/parse", files=files)
         return self.client.request("POST", f"{_BASE}/projects/{project_id}/manuscript/parse", files=files)
@@ -233,6 +265,12 @@ class AudiobookService(BaseService):
         Returns the queued ``task_id`` plus a ``billing`` breakdown (first take
         billed, first regen free). Raises on 402 when credits are short and on
         409 when the paragraph is locked.
+
+        ``direction`` is a short performance note the narrator acts on, e.g.
+        ``"urgent, low, barely audible"``. The field accepts up to 500
+        characters, but only the first ~110 shape the performance — write one
+        instruction of roughly a dozen words. A longer one comes back with a
+        ``warnings`` entry saying how much is not voiced.
         """
         body = {k: v for k, v in options.items() if v is not None}
         path = f"{_BASE}/projects/{project_id}/paragraphs/{paragraph_id}/narrate"
@@ -258,6 +296,22 @@ class AudiobookService(BaseService):
         project is narrated. Already-completed, locked and skip-flagged
         paragraphs are excluded unless the matching ``include_*`` flag is set.
         Returns ``job_id``, ``total_paragraphs`` and ``skipped_paragraphs``.
+
+        ``narration_settings`` is passed through verbatim. The key that matters
+        most for how a book SOUNDS is ``delivery_mode``:
+
+        * ``"stable"`` — one steady narrator across hundreds of paragraphs, at
+          the cost of performance range. This is the default for books.
+        * ``"balanced"`` — between the two.
+        * ``"creative"`` — the most range; the read a narrative title usually
+          wants.
+
+        ``speed`` (0.5–2.0) and ``language`` (a bare subtag such as ``"it"``,
+        overriding the project's) are also honoured here.
+
+        To re-narrate a book that is already finished, pass
+        ``include_completed=True`` — otherwise every paragraph is skipped and
+        the call 400s with "No eligible paragraphs to narrate".
         """
         body: Dict[str, Any] = {
             "include_completed": include_completed,
@@ -297,6 +351,126 @@ class AudiobookService(BaseService):
         if self.async_mode:
             return self._async_request("POST", path)
         return self.client.request("POST", path)
+
+    # ---------------------------------------------------------------- direction
+    def auto_direct(
+        self, project_id: str, chapter_ids: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """
+        Write contextual reading direction onto every narratable paragraph, so
+        the book narrates expressively instead of flat.
+
+        Two passes: one narration brief for the whole book (its reading
+        identity, derived from the metadata and opening pages), then a short
+        performance note plus an emotion per paragraph, anchored to that brief
+        so the tone holds across chapters instead of drifting. Dialogue gets
+        directed as dialogue.
+
+        Free on every plan. It never re-splits or deletes anything — it only
+        writes ``direction``/``emotion`` onto rows that already exist — and a
+        direction YOU wrote is never overwritten: those rows are marked
+        user-owned and skipped on every later run.
+
+        Pass ``chapter_ids`` to direct a subset; omit it for the whole book.
+        Returns ``job_id`` and ``total_chapters``.
+
+        Directing does NOT re-render existing audio. Follow it with
+        ``batch_narrate(..., include_completed=True)`` to hear it.
+
+        Raises :class:`~audiopod.exceptions.APIError` with ``status_code`` 409
+        when a direction run is already in flight for this project.
+        """
+        body: Dict[str, Any] = {}
+        # Omit the key entirely when no subset is given — the server reads its
+        # absence as "the whole book", while an empty list would scope the run
+        # to nothing and 400 with "No chapters found to direct".
+        if chapter_ids:
+            body["chapter_ids"] = chapter_ids
+        path = f"{_BASE}/projects/{project_id}/direction/auto"
+        if self.async_mode:
+            return self._async_request("POST", path, json_data=body)
+        return self.client.request("POST", path, json_data=body)
+
+    def auto_direction_status(self, project_id: str, job_id: Any) -> Dict[str, Any]:
+        """Progress of a specific auto-direction run."""
+        path = f"{_BASE}/projects/{project_id}/direction/auto/{job_id}/status"
+        if self.async_mode:
+            return self._async_request("GET", path)
+        return self.client.request("GET", path)
+
+    def latest_auto_direction(self, project_id: str) -> Dict[str, Any]:
+        """Progress of this project's most recent auto-direction run."""
+        path = f"{_BASE}/projects/{project_id}/direction/auto/latest"
+        if self.async_mode:
+            return self._async_request("GET", path)
+        return self.client.request("GET", path)
+
+    def auto_direct_and_wait(
+        self,
+        project_id: str,
+        chapter_ids: Optional[List[str]] = None,
+        timeout: int = 900,
+        poll_interval: int = 3,
+    ) -> Dict[str, Any]:
+        """Direct the book and block until the run reaches a terminal state.
+
+        Returns the final status payload, whether the run completed or failed —
+        read ``status`` and ``result``. Raises ``TimeoutError`` if it never
+        settles; the service treats a run still pending after 90 minutes as
+        dead, so waiting longer than that is never useful.
+        """
+        if self.async_mode:
+            return self._async_auto_direct_and_wait(
+                project_id, chapter_ids, timeout, poll_interval
+            )
+
+        job = self.auto_direct(project_id, chapter_ids=chapter_ids)
+        job_id = job.get("job_id")
+        start = time.time()
+        status: Dict[str, Any] = {}
+        while time.time() - start < timeout:
+            status = self.auto_direction_status(project_id, job_id)
+            if self._direction_finished(status):
+                return status
+            time.sleep(poll_interval)
+        raise TimeoutError(
+            f"Auto direction for project {project_id} (job {job_id}) did not "
+            f"finish within {timeout}s; last status: {status.get('status')!r}"
+        )
+
+    async def _async_auto_direct_and_wait(
+        self,
+        project_id: str,
+        chapter_ids: Optional[List[str]],
+        timeout: int,
+        poll_interval: int,
+    ) -> Dict[str, Any]:
+        import asyncio
+
+        job = await self.auto_direct(project_id, chapter_ids=chapter_ids)
+        job_id = job.get("job_id")
+        start = time.time()
+        status: Dict[str, Any] = {}
+        while time.time() - start < timeout:
+            status = await self.auto_direction_status(project_id, job_id)
+            if self._direction_finished(status):
+                return status
+            await asyncio.sleep(poll_interval)
+        raise TimeoutError(
+            f"Auto direction for project {project_id} (job {job_id}) did not "
+            f"finish within {timeout}s; last status: {status.get('status')!r}"
+        )
+
+    @staticmethod
+    def _direction_finished(status: Dict[str, Any]) -> bool:
+        """Terminal states for a direction job. Both spellings of "cancelled"
+        are accepted because the job tables are not uniform about it."""
+        return str(status.get("status") or "").upper() in {
+            "COMPLETED",
+            "FAILED",
+            "CANCELED",
+            "CANCELLED",
+        }
 
     # ------------------------------------------------------------------- voices
     def list_voices(self) -> Dict[str, Any]:
