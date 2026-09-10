@@ -226,11 +226,34 @@ class AudiobookService(BaseService):
             return self._async_request("PUT", f"{_BASE}/projects/{project_id}/chapters/{chapter_id}", json_data=fields)
         return self.client.request("PUT", f"{_BASE}/projects/{project_id}/chapters/{chapter_id}", json_data=fields)
 
-    def regenerate_chapter(self, project_id: str, chapter_id: str) -> Dict[str, Any]:
-        """Re-render a single chapter's audio (e.g. after an edit)."""
+    def regenerate_chapter(
+        self, project_id: str, chapter_id: str, voice_id: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """Re-render a whole chapter's audio (e.g. after an edit).
+
+        Posts to ``/narration/batch``. The older
+        ``/chapters/{chapter_id}/regenerate`` route is deprecated and returns
+        410 Gone unconditionally — as ``/narration/start`` does — so every call
+        through this method used to fail outright.
+
+        ``include_completed`` is always true here: a chapter being RE-rendered
+        already has audio, and without it every paragraph is skipped and the
+        call 400s with "No eligible paragraphs to narrate".
+
+        The return shape changed with the route — this now returns a queued
+        batch job (``job_id``, ``total_paragraphs``, ``skipped_paragraphs``),
+        not a finished chapter. Poll :meth:`narration_progress` for completion.
+        """
+        body: Dict[str, Any] = {
+            "chapter_ids": [chapter_id],
+            "include_completed": True,
+        }
+        if voice_id is not None:
+            body["voice_id"] = voice_id
+        path = f"{_BASE}/projects/{project_id}/narration/batch"
         if self.async_mode:
-            return self._async_request("POST", f"{_BASE}/projects/{project_id}/chapters/{chapter_id}/regenerate")
-        return self.client.request("POST", f"{_BASE}/projects/{project_id}/chapters/{chapter_id}/regenerate")
+            return self._async_request("POST", path, json_data=body)
+        return self.client.request("POST", path, json_data=body)
 
     # --------------------------------------------------------------- paragraphs
     def list_paragraphs(
@@ -502,10 +525,9 @@ class AudiobookService(BaseService):
     ) -> Dict[str, Any]:
         """Queue narration for all chapters (or ``chapter_ids``) without waiting.
 
-        Posts to ``/narration/batch``. The older ``/narration/start`` route was
-        retired (PLAT-2087) because it bypassed metering entirely, and now
-        returns 410 Gone unconditionally — so every call through this method,
-        including :meth:`produce`, used to fail outright.
+        Posts to ``/narration/batch``. The older ``/narration/start`` route is
+        deprecated and returns 410 Gone unconditionally — so every call through
+        this method, including :meth:`produce`, used to fail outright.
 
         ``batch`` narrates the whole project when no ``chapter_ids`` are given,
         which is what this method has always meant.
