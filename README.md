@@ -12,6 +12,12 @@ try, no card required. API usage is **pay-as-you-go** ($1 = 7,500 credits,
 credits never expire). Get a key at
 [audiopod.ai/dashboard/account/api-keys](https://www.audiopod.ai/dashboard/account/api-keys).
 
+[![Run in Postman](https://run.pstmn.io/button.svg)](https://god.gw.postman.com/run-collection/58401244-916ddbda-1a70-4c07-8ccd-fe524703a84b?action=collection%2Ffork&source=rip_markdown&collection-url=entityId%3D58401244-916ddbda-1a70-4c07-8ccd-fe524703a84b%26entityType%3Dcollection%26workspaceId%3D8013472d-5897-47d1-bf5c-92683a027b35&utm_source=audiopod-sdk-python)
+
+Want to see a response before installing anything? The **Getting Started**
+collection reaches a real `200` in two requests with no account and no API key.
+[More about the collections](https://docs.audiopod.ai/sdks/postman).
+
 ## Installation
 
 ```bash
