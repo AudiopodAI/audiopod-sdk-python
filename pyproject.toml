@@ -51,6 +51,9 @@ dev = [
 where = ["."]
 include = ["audiopod*"]
 
+[tool.setuptools.package-data]
+audiopod = ["py.typed"]
+
 [tool.black]
 line-length = 100
 target-version = ["py38", "py39", "py310", "py311", "py312"]
@@ -59,4 +62,3 @@ target-version = ["py38", "py39", "py310", "py311", "py312"]
 python_version = "3.8"
 warn_return_any = true
 warn_unused_configs = true
-

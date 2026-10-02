@@ -1,5 +1,5 @@
 """
-Translation Service - Audio/speech translation
+Legacy translation resource (deprecated; speech-dubbing routes are unsupported).
 
 API Routes:
 - POST /api/v1/translation/translate/speech   - Translate speech
@@ -9,6 +9,7 @@ API Routes:
 """
 
 from typing import Optional, Dict, Any, List
+import warnings
 from .base import BaseService
 
 
@@ -38,6 +39,11 @@ class TranslationService(BaseService):
         Returns:
             Job dict with translated audio URL when completed
         """
+        warnings.warn(
+            "translation.translate targets an unsupported legacy speech-dubbing route. "
+            "The /audio/translations API returns speech-to-English text, not dubbed audio.",
+            DeprecationWarning, stacklevel=2,
+        )
         data = {"target_language": target_language}
         if source_language:
             data["source_language"] = source_language
@@ -132,4 +138,3 @@ class TranslationService(BaseService):
             await asyncio.sleep(5)
 
         raise TimeoutError(f"Translation {job_id} did not complete within {timeout} seconds")
-

@@ -3,6 +3,7 @@ AudioPod SDK Configuration
 """
 
 from dataclasses import dataclass
+from ._version import VERSION
 
 
 @dataclass
@@ -13,5 +14,4 @@ class ClientConfig:
     max_retries: int = 3
     verify_ssl: bool = True
     debug: bool = False
-    version: str = "1.3.0"
-
+    version: str = VERSION

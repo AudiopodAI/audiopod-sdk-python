@@ -3,9 +3,11 @@ AudioPod SDK for Python
 Professional Audio Processing powered by AI
 """
 
-__version__ = "2.8.2"
+from ._version import VERSION as __version__
 
 from .client import Client, AsyncClient
+from .workflow_contracts import VOICE_CONSENT_VERSION
+from . import workflow_contracts
 from .exceptions import (
     AudioPodError,
     AuthenticationError,
@@ -29,5 +31,6 @@ __all__ = [
     "ValidationError",
     "InsufficientBalanceError",
     "__version__",
+    "VOICE_CONSENT_VERSION",
+    "workflow_contracts",
 ]
-

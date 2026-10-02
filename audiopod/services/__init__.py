@@ -18,6 +18,8 @@ from .audiobook import AudiobookService
 from .midi import MidiService
 from .podcast import PodcastService
 from .reader import ReaderService
+from .dubbing import DubbingService
+from .uploads import UploadsService
 
 __all__ = [
     "BaseService",
@@ -36,5 +38,6 @@ __all__ = [
     "MidiService",
     "PodcastService",
     "ReaderService",
+    "DubbingService",
+    "UploadsService",
 ]
-

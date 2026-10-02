@@ -29,6 +29,8 @@ from .services import (
     MidiService,
     PodcastService,
     ReaderService,
+    DubbingService,
+    UploadsService,
 )
 
 logger = logging.getLogger(__name__)
@@ -45,6 +47,7 @@ class BaseClient:
         max_retries: int = 3,
         verify_ssl: bool = True,
         debug: bool = False,
+        access_token: Optional[str] = None,
     ):
         """
         Initialize the AudioPod API client.
@@ -53,9 +56,10 @@ class BaseClient:
             api_key: Your AudioPod API key. If None, reads from AUDIOPOD_API_KEY env var.
             base_url: API base URL. Defaults to https://api.audiopod.ai
             timeout: Request timeout in seconds.
-            max_retries: Maximum retries for failed requests.
+            max_retries: Retries for safe reads; charged POSTs are not retried.
             verify_ssl: Whether to verify SSL certificates.
             debug: Enable debug logging.
+            access_token: Explicit signed-in JWT, exclusive with api_key.
         """
         if debug:
             # Security audit F8: scope debug logging to the "audiopod" logger
@@ -70,13 +74,16 @@ class BaseClient:
             for _noisy in ("urllib3", "requests", "http.client", "aiohttp"):
                 logging.getLogger(_noisy).setLevel(logging.WARNING)
 
-        self.api_key = api_key or os.getenv("AUDIOPOD_API_KEY")
+        if api_key and access_token:
+            raise AuthenticationError("Choose api_key or access_token")
+        self.access_token = access_token
+        self.api_key = access_token or api_key or os.getenv("AUDIOPOD_API_KEY")
         if not self.api_key:
             raise AuthenticationError(
                 "API key required. Pass api_key or set AUDIOPOD_API_KEY environment variable."
             )
 
-        if not self.api_key.startswith("ap_"):
+        if not access_token and not self.api_key.startswith("ap_"):
             raise AuthenticationError("Invalid API key format. Keys start with 'ap_'")
 
         self.config = ClientConfig(
@@ -90,7 +97,7 @@ class BaseClient:
     def _get_headers(self) -> Dict[str, str]:
         return {
             "Authorization": f"Bearer {self.api_key}",
-            "X-API-Key": self.api_key,
+            **({"X-API-Key":self.api_key} if not self.access_token else {}),
             "Content-Type": "application/json",
             "User-Agent": f"audiopod-python/{self.config.version}",
             "Accept": "application/json",
@@ -102,28 +109,27 @@ class BaseClient:
             if response.status_code == 204:
                 return {}
             return response.json()
-        except requests.exceptions.HTTPError as e:
-            if response.status_code == 401:
-                raise AuthenticationError("Invalid API key")
-            elif response.status_code == 402:
-                try:
-                    data = response.json()
-                    raise InsufficientBalanceError(
-                        data.get("message", "Insufficient balance"),
-                        required_cents=data.get("required_cents"),
-                        available_cents=data.get("available_cents"),
-                    )
-                except (ValueError, KeyError):
-                    raise InsufficientBalanceError("Insufficient wallet balance")
-            elif response.status_code == 429:
-                raise RateLimitError("Rate limit exceeded")
-            else:
-                try:
-                    error_data = response.json()
-                    message = error_data.get("detail", str(e))
-                except:
-                    message = str(e)
-                raise APIError(f"API error: {message}", status_code=response.status_code)
+        except requests.exceptions.HTTPError as error:
+            try:
+                data = response.json()
+            except ValueError:
+                data = {"detail":str(error)}
+            self._raise_error(response.status_code,data,response.headers.get("Retry-After"))
+
+    @staticmethod
+    def _raise_error(status, data, retry_after=None):
+        detail = data.get("detail",data) if isinstance(data,dict) else data
+        message = detail if isinstance(detail,str) else "Request rejected"
+        if isinstance(detail,dict): message = detail.get("message") or detail.get("code") or "Request rejected"
+        if status == 401:
+            raise AuthenticationError(message,status_code=status,detail=detail,retry_after=retry_after)
+        if status == 429:
+            raise RateLimitError(message,status_code=status,detail=detail,retry_after=retry_after)
+        if status == 402:
+            fields = detail if isinstance(detail,dict) else {}
+            raise InsufficientBalanceError(message,required_cents=fields.get("required_cents"),
+                available_cents=fields.get("available_cents"),detail=detail,retry_after=retry_after)
+        raise APIError(message,status_code=status,detail=detail,retry_after=retry_after)
 
 
 class Client(BaseClient):
@@ -155,7 +161,8 @@ class Client(BaseClient):
         retry_strategy = Retry(
             total=self.config.max_retries,
             status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["HEAD", "GET", "OPTIONS", "POST", "DELETE"],
+            # A lost response to a charged POST is not permission to charge again.
+            allowed_methods=["HEAD", "GET", "OPTIONS", "DELETE"],
             backoff_factor=1,
         )
         adapter = HTTPAdapter(max_retries=retry_strategy)
@@ -178,6 +185,8 @@ class Client(BaseClient):
         self.midi = MidiService(self)
         self.podcast = PodcastService(self)
         self.reader = ReaderService(self)
+        self.dubbing = DubbingService(self)
+        self.uploads = UploadsService(self)
 
     def request(
         self,
@@ -194,6 +203,8 @@ class Client(BaseClient):
 
         if files:
             headers.pop("Content-Type", None)
+        elif data is not None and json_data is None:
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
 
         response = self.session.request(
             method=method,
@@ -207,6 +218,12 @@ class Client(BaseClient):
             verify=self.config.verify_ssl,
         )
         return self._handle_response(response)
+
+    def request_bytes(self, endpoint: str) -> bytes:
+        response = self.session.get(urljoin(self.config.base_url,endpoint),headers=self._get_headers(),
+            timeout=self.config.timeout,verify=self.config.verify_ssl)
+        if response.status_code >= 400: self._handle_response(response)
+        return response.content
 
     def get_user_info(self) -> Dict[str, Any]:
         """Get current user information."""
@@ -261,6 +278,8 @@ class AsyncClient(BaseClient):
         self.midi = MidiService(self, async_mode=True)
         self.podcast = PodcastService(self, async_mode=True)
         self.reader = ReaderService(self, async_mode=True)
+        self.dubbing = DubbingService(self, async_mode=True)
+        self.uploads = UploadsService(self, async_mode=True)
 
     @property
     def session(self) -> aiohttp.ClientSession:
@@ -321,6 +340,8 @@ class AsyncClient(BaseClient):
             json=json_data,
             data=data,
             params=params,
+            headers={"Content-Type": "application/x-www-form-urlencoded"}
+            if data is not None and json_data is None else None,
         ) as response:
             return await self._handle_async_response(response)
 
@@ -330,23 +351,17 @@ class AsyncClient(BaseClient):
         try:
             response.raise_for_status()
             return await response.json()
-        except aiohttp.ClientResponseError as e:
-            if response.status == 401:
-                raise AuthenticationError("Invalid API key")
-            elif response.status == 402:
-                try:
-                    data = await response.json()
-                    raise InsufficientBalanceError(
-                        data.get("message", "Insufficient balance"),
-                        required_cents=data.get("required_cents"),
-                        available_cents=data.get("available_cents"),
-                    )
-                except:
-                    raise InsufficientBalanceError("Insufficient wallet balance")
-            elif response.status == 429:
-                raise RateLimitError("Rate limit exceeded")
-            else:
-                raise APIError(f"API error: {e}", status_code=response.status)
+        except aiohttp.ClientResponseError as error:
+            try:
+                data = await response.json()
+            except (ValueError,aiohttp.ContentTypeError):
+                data = {"detail":str(error)}
+            self._raise_error(response.status,data,response.headers.get("Retry-After"))
+
+    async def request_bytes(self, endpoint: str) -> bytes:
+        async with self.session.get(urljoin(self.config.base_url,endpoint)) as response:
+            if response.status >= 400: await self._handle_async_response(response)
+            return await response.read()
 
     async def get_user_info(self) -> Dict[str, Any]:
         """Get current user information."""
@@ -362,4 +377,3 @@ class AsyncClient(BaseClient):
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.close()
-
