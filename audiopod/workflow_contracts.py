@@ -2,6 +2,40 @@
 from typing import Any, Dict, List, Literal, Optional, TypedDict
 
 VOICE_CONSENT_VERSION = "2026-10-02.voice-consent.v1"
+
+
+class PodcastTakeTiming(TypedDict):
+    """Decoded WAV frame positions; both identity strings are SHA256 digests."""
+    dialogue_id: str
+    take_identity: Optional[str]
+    audio_sha256: str
+    format: Literal["wav"]
+    start_frame: int
+    end_frame: int
+    sample_rate: int
+
+
+class _PodcastDialogueDefaults(TypedDict, total=False):
+    id: str
+    take_identity: Optional[str]
+
+
+class PodcastDialogue(_PodcastDialogueDefaults):
+    """Typed projection; optional identity preserves legacy dialogue responses."""
+    speaker: str
+    text: str
+
+
+class _PodcastProjectDefaults(TypedDict, total=False):
+    dialogues: List[PodcastDialogue]
+    combined_timing: Optional[List[PodcastTakeTiming]]
+
+
+class PodcastProject(_PodcastProjectDefaults):
+    """Typed take metadata projection; full SDK responses remain dictionaries."""
+    id: str
+
+
 DubbingOutput = Literal["audio", "srt", "vtt", "video"]
 DubbingStatus = Literal["analyzing", "review_required", "generating", "export_partial", "settle_pending", "release_pending", "completed", "failed", "cancelled", "expired"]
 ConsentProjectKind = Literal["account", "tts", "podcast", "dubbing"]

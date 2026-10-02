@@ -443,6 +443,21 @@ except APIError as e:
     print(f"API error ({e.status_code}): {e}")
 ```
 
+## Podcast take metadata
+
+Podcast responses expose optional `dialogues[].take_identity` (a nullable
+SHA256) and `combined_timing` (a nullable list of measured WAV frame entries).
+Each entry includes `start_frame`, `end_frame` and `sample_rate`. Legacy
+responses can omit these fields. Responses remain ordinary dictionaries and
+retain additional server fields. Preserve a dialogue's existing `id` when
+updating its transcript to retain saved takes across reordering.
+
+Optional typed projections are exported for metadata annotations:
+
+```python
+from audiopod import PodcastDialogue, PodcastProject, PodcastTakeTiming
+```
+
 ## Documentation
 
 - [API Reference](https://docs.audiopod.ai)

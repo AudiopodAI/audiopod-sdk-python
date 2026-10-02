@@ -6,7 +6,7 @@ Professional Audio Processing powered by AI
 from ._version import VERSION as __version__
 
 from .client import Client, AsyncClient
-from .workflow_contracts import VOICE_CONSENT_VERSION
+from .workflow_contracts import VOICE_CONSENT_VERSION, PodcastDialogue, PodcastProject, PodcastTakeTiming
 from . import workflow_contracts
 from .exceptions import (
     AudioPodError,
@@ -33,4 +33,7 @@ __all__ = [
     "__version__",
     "VOICE_CONSENT_VERSION",
     "workflow_contracts",
+    "PodcastDialogue",
+    "PodcastProject",
+    "PodcastTakeTiming",
 ]
