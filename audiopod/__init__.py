@@ -3,7 +3,7 @@ AudioPod SDK for Python
 Professional Audio Processing powered by AI
 """
 
-__version__ = "2.8.2"
+__version__ = "2.10.0"
 
 from .client import Client, AsyncClient
 from .exceptions import (
