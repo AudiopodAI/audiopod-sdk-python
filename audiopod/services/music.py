@@ -16,10 +16,23 @@ API Routes:
 - GET  /api/v1/music/jobs               - List jobs
 - DELETE /api/v1/music/jobs/{id}        - Delete job
 - GET  /api/v1/music/presets            - Get genre presets
+
+Score-first music (AudioMusic v3) - the song is written as an editable score
+(ABC notation) first, and the audio is rendered from that score:
+- GET  /api/v1/music/v3/availability      - Is AudioMusic v3 offered here?
+- POST /api/v1/music/v3/plan              - Write a score only (no audio)
+- POST /api/v1/music/v3/revise            - Revise a score from an instruction
+- POST /api/v1/music/v3/edit              - Record (render) a complete score
+- POST /api/v1/music/v3/generate          - Score + audio in one call
+- GET  /api/v1/music/v3/jobs              - List v3 jobs
+- GET  /api/v1/music/v3/jobs/{id}         - Get one v3 job
+- GET  /api/v1/music/v3/jobs/{id}/score   - Get a job's score
 """
 
+import time
 from typing import Optional, Dict, Any, List, Literal
 from .base import BaseService
+from ..exceptions import AudioPodError, ValidationError
 
 
 MusicTask = Literal[
@@ -27,7 +40,29 @@ MusicTask = Literal[
     "cover", "repaint", "extract", "complete", "simple", "retake", "extend", "edit",
 ]
 
+#: Deprecated. Every plan now gets the highest-quality music model at the
+#: standard rate, so there is nothing to choose. Kept so existing code that
+#: passes ``quality=`` keeps type-checking and running.
 MusicQuality = Literal["standard", "premium"]
+
+#: How much of the song AudioMusic v3 writes as a score first: ``"full"``
+#: (melody and harmony) or ``"melody"`` (the tune alone).
+MusicV3Cot = Literal["full", "melody"]
+
+#: Which v3 entry point produced a job (filter for :meth:`MusicService.list_v3_jobs`).
+MusicV3Workflow = Literal["generate", "plan", "edit", "revise"]
+
+V3_PREFIX = "/api/v1/music/v3"
+
+#: Longest ``instruction`` :meth:`MusicService.revise_score` accepts.
+MAX_REVISE_INSTRUCTION_CHARS = 500
+
+_V3_DONE = "COMPLETED"
+_V3_FAILED = ("FAILED", "ERROR", "CANCELLED", "CANCELED")
+
+
+def _drop_none(data: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: v for k, v in data.items() if v is not None}
 
 
 class MusicService(BaseService):
@@ -61,7 +96,9 @@ class MusicService(BaseService):
             lyrics: Lyrics for vocal tasks (with [verse], [chorus] tags)
             genre_preset: Genre preset name
             display_name: Custom name for the job
-            quality: Generation quality tier - "standard" or "premium"
+            quality: Deprecated and no longer needed. Every plan now gets the
+                highest-quality music model at the standard rate. Still accepted
+                for compatibility; only sent when you pass it explicitly.
             wait_for_completion: Wait for completion
             timeout: Max wait time in seconds
             **kwargs: AudioMusic V2 advanced parameters:
@@ -73,7 +110,7 @@ class MusicService(BaseService):
                 guidance_scale (float): CFG scale (1.0-15.0). Default: 7.0
                 shift (float): Timestep shift (1.0-5.0). Default: 3.0
                 infer_method (str): "ode" or "sde". Default: "ode"
-                thinking (bool): Enable 4B LM Chain-of-Thought. Default: True
+                thinking (bool): Enable Chain-of-Thought planning. Default: True
                 lm_temperature (float): LM temperature (0.0-2.0). Default: 0.85
                 lm_cfg_scale (float): LM CFG (0.0-10.0). Default: 2.0
                 bpm (int): Beats per minute (30-300, None for auto)
@@ -224,7 +261,9 @@ class MusicService(BaseService):
             display_name: Custom name for the track
             duration: Duration in seconds (-1 for auto). Default: -1
             format: Output format. Default: "flac"
-            quality: Generation quality tier - "standard" or "premium"
+            quality: Deprecated and no longer needed. Every plan now gets the
+                highest-quality music model at the standard rate. Still accepted
+                for compatibility; only sent when you pass it explicitly.
             wait_for_completion: Wait for completion
             timeout: Max wait time in seconds
 
@@ -279,7 +318,9 @@ class MusicService(BaseService):
             display_name: Custom name for the track
             duration: Duration in seconds (-1 for auto). Default: -1
             format: Output format. Default: "flac"
-            quality: Generation quality tier - "standard" or "premium"
+            quality: Deprecated and no longer needed. Every plan now gets the
+                highest-quality music model at the standard rate. Still accepted
+                for compatibility; only sent when you pass it explicitly.
             wait_for_completion: Wait for completion
             timeout: Max wait time in seconds
 
@@ -336,7 +377,9 @@ class MusicService(BaseService):
             display_name: Custom name for the track
             duration: Duration in seconds (-1 for auto). Default: -1
             format: Output format. Default: "flac"
-            quality: Generation quality tier - "standard" or "premium"
+            quality: Deprecated and no longer needed. Every plan now gets the
+                highest-quality music model at the standard rate. Still accepted
+                for compatibility; only sent when you pass it explicitly.
             wait_for_completion: Wait for completion
             timeout: Max wait time in seconds
 
@@ -480,6 +523,355 @@ class MusicService(BaseService):
     async def _async_get_presets(self) -> Dict[str, Any]:
         return await self.client.request("GET", "/api/v1/music/presets")
 
+    # ------------------------------------------------------------------
+    # Score-first music (AudioMusic v3)
+    #
+    # Every v3 track starts as an editable score in ABC notation. The usual
+    # loop is: compose (score only) -> revise_score / hand-edit -> record_score
+    # (render audio from the score). ``generate_v3`` does score + audio in one
+    # call. There is no ``duration``: length follows the lyrics / score.
+    #
+    # In async mode (``AsyncClient``) every method returns an awaitable.
+    # ------------------------------------------------------------------
+
+    def v3_availability(self) -> Dict[str, Any]:
+        """Whether score-first music (AudioMusic v3) is offered.
+
+        Always answers, even where v3 is switched off. Hide your v3 surface when
+        ``available`` is false rather than discovering it through 404s.
+
+        Returns:
+            ``{"available": bool}``
+        """
+        return self.client.request("GET", f"{V3_PREFIX}/availability")
+
+    def compose(
+        self,
+        style: str,
+        lyrics: Optional[str] = None,
+        description: Optional[str] = None,
+        cot: Optional[MusicV3Cot] = None,
+        seed: Optional[int] = None,
+        cfg_scale: Optional[float] = None,
+        display_name: Optional[str] = None,
+        target_seconds: Optional[float] = None,
+        language: Optional[str] = None,
+        wait_for_completion: bool = False,
+        timeout: int = 900,
+        poll_interval: int = 5,
+    ) -> Dict[str, Any]:
+        """Write a score only, no audio (``POST /music/v3/plan``).
+
+        Review or revise the score, then render it with :meth:`record_score`.
+        Charges a small fixed amount for writing the score; nothing for audio.
+
+        Args:
+            style: Genre, instrumentation, mood, tempo feel, vocal character
+                (1-2000 chars).
+            lyrics: Lyrics, optionally with ``[Verse]``/``[Chorus]`` tags. Empty
+                or omitted for an instrumental. Mutually exclusive with
+                ``description``.
+            description: COMING SOON - a plain-language brief to write the song
+                from instead of lyrics. Mutually exclusive with ``lyrics``. Until
+                the server supports it, sending it is rejected (422).
+            cot: ``"full"`` (melody + harmony, the default) or ``"melody"``.
+            seed: Reuse a seed to get closer to a previous result (0..2**31-1).
+            cfg_scale: How literally to follow ``style`` (1.0-10.0, server
+                default 3.0).
+            display_name: Your own name for the track (max 200 chars).
+            target_seconds: COMING SOON - an approximate target length.
+                Rejected (422) until the server supports it.
+            language: COMING SOON - lyric/vocal language code. Rejected (422)
+                until the server supports it.
+            wait_for_completion: Poll until the score is ready.
+            timeout: Max seconds to wait when ``wait_for_completion``.
+            poll_interval: Seconds between polls.
+
+        Returns:
+            The v3 job (``job_id``, ``status``, ``score`` once complete, ...).
+        """
+        if lyrics and description:
+            raise ValidationError("Pass either lyrics or description, not both.")
+        if description is not None and not lyrics:
+            lyrics = None  # an empty lyrics string must not ride along with a description
+        data = _drop_none(
+            {
+                "style": style,
+                "lyrics": lyrics,
+                "description": description,
+                "cot": cot,
+                "seed": seed,
+                "cfg_scale": cfg_scale,
+                "display_name": display_name,
+                "target_seconds": target_seconds,
+                "language": language,
+            }
+        )
+        return self._v3_submit("/plan", data, wait_for_completion, timeout, poll_interval)
+
+    def revise_score(
+        self,
+        source_job_id: int,
+        instruction: str,
+        section: Optional[str] = None,
+        bars: Optional[Dict[str, int]] = None,
+        allow_tempo_change: Optional[bool] = None,
+        wait_for_completion: bool = False,
+        timeout: int = 900,
+        poll_interval: int = 5,
+    ) -> Dict[str, Any]:
+        """Revise a job's score from a plain-language instruction (``POST /music/v3/revise``).
+
+        COMING SOON: the server side of this endpoint is still rolling out;
+        until it does, this call answers 404.
+
+        Produces a new score-only job (no audio). Its ``score_comparison`` says
+        what changed, including ``changed_bars``. Render it with
+        :meth:`record_score` when you are happy with it.
+
+        Args:
+            source_job_id: The v3 job whose score you want revised.
+            instruction: What to change, e.g. "make the chorus build more"
+                (1-500 chars).
+            section: Limit the revision to one section, e.g. ``"Chorus"``.
+            bars: Limit the revision to a bar range, ``{"start": 9, "end": 16}``.
+            allow_tempo_change: Permit the revision to change the tempo.
+            wait_for_completion: Poll until the revised score is ready.
+            timeout: Max seconds to wait when ``wait_for_completion``.
+            poll_interval: Seconds between polls.
+
+        Returns:
+            The new v3 job.
+        """
+        if not instruction or not instruction.strip():
+            raise ValidationError("instruction must not be empty.")
+        if len(instruction) > MAX_REVISE_INSTRUCTION_CHARS:
+            raise ValidationError(
+                f"instruction must be at most {MAX_REVISE_INSTRUCTION_CHARS} characters "
+                f"(got {len(instruction)})."
+            )
+        if bars is not None:
+            start, end = bars.get("start"), bars.get("end")
+            if (
+                not isinstance(start, int)
+                or not isinstance(end, int)
+                or isinstance(start, bool)
+                or isinstance(end, bool)
+                or start > end
+            ):
+                raise ValidationError('bars must be {"start": int, "end": int} with start <= end.')
+            bars = {"start": start, "end": end}
+        data = _drop_none(
+            {
+                "source_job_id": source_job_id,
+                "instruction": instruction,
+                "section": section,
+                "bars": bars,
+                "allow_tempo_change": allow_tempo_change,
+            }
+        )
+        return self._v3_submit("/revise", data, wait_for_completion, timeout, poll_interval)
+
+    def record_score(
+        self,
+        source_job_id: int,
+        abc: str,
+        style: Optional[str] = None,
+        lyrics: Optional[str] = None,
+        cot: Optional[MusicV3Cot] = None,
+        seed: Optional[int] = None,
+        cfg_scale: Optional[float] = None,
+        display_name: Optional[str] = None,
+        allow_tempo_change: Optional[bool] = None,
+        wait_for_completion: bool = False,
+        timeout: int = 900,
+        poll_interval: int = 5,
+    ) -> Dict[str, Any]:
+        """Render audio from a complete score (``POST /music/v3/edit``).
+
+        This records a new take from the score you send: sections you did not
+        change are still performed afresh. An identical request for the same
+        source that is still in progress is refused with 409
+        (``SCORE_ALREADY_RECORDING``); poll the ``job_id`` in that error instead.
+
+        Args:
+            source_job_id: The job the score came from.
+            abc: The COMPLETE score in ABC notation (not a fragment).
+            style: Replacement style text; omit to reuse the source's.
+            lyrics: Replacement lyrics; omit to reuse the source's.
+            cot: ``"melody"`` (server default) lets the arrangement follow the
+                tune freely; ``"full"`` holds it to the written harmony.
+            seed: Optional seed.
+            cfg_scale: How literally to follow ``style`` (1.0-10.0).
+            display_name: Your own name for the track.
+            allow_tempo_change: Permit the score to change the source's tempo
+                (off by default on the server).
+            wait_for_completion: Poll until the recording is ready.
+            timeout: Max seconds to wait when ``wait_for_completion``.
+            poll_interval: Seconds between polls.
+
+        Returns:
+            The new v3 job; once complete it carries ``audio_url``.
+        """
+        if not abc or not abc.strip():
+            raise ValidationError("abc must be a complete, non-empty score.")
+        data = _drop_none(
+            {
+                "source_job_id": source_job_id,
+                "abc": abc,
+                "style": style,
+                "lyrics": lyrics,
+                "cot": cot,
+                "seed": seed,
+                "cfg_scale": cfg_scale,
+                "display_name": display_name,
+                "allow_tempo_change": allow_tempo_change,
+            }
+        )
+        return self._v3_submit("/edit", data, wait_for_completion, timeout, poll_interval)
+
+    def generate_v3(
+        self,
+        style: str,
+        lyrics: Optional[str] = None,
+        abc: Optional[str] = None,
+        cot: Optional[MusicV3Cot] = None,
+        seed: Optional[int] = None,
+        cfg_scale: Optional[float] = None,
+        display_name: Optional[str] = None,
+        wait_for_completion: bool = False,
+        timeout: int = 900,
+        poll_interval: int = 5,
+    ) -> Dict[str, Any]:
+        """Write a score AND render the song in one call (``POST /music/v3/generate``).
+
+        There is no ``duration``: length follows how much lyric text you send.
+        Billed as a small score charge plus the music priced from the score
+        (see ``billing`` on the job).
+
+        Args:
+            style: Genre, instrumentation, mood, tempo feel, vocal character.
+            lyrics: Lyrics; empty or omitted for an instrumental.
+            abc: An existing complete score to render instead of writing one.
+            cot: ``"full"`` (default) or ``"melody"``.
+            seed: Optional seed.
+            cfg_scale: How literally to follow ``style`` (1.0-10.0).
+            display_name: Your own name for the track.
+            wait_for_completion: Poll until the song is ready.
+            timeout: Max seconds to wait when ``wait_for_completion``.
+            poll_interval: Seconds between polls.
+
+        Returns:
+            The v3 job.
+        """
+        data = _drop_none(
+            {
+                "style": style,
+                "lyrics": lyrics,
+                "abc": abc,
+                "cot": cot,
+                "seed": seed,
+                "cfg_scale": cfg_scale,
+                "display_name": display_name,
+            }
+        )
+        return self._v3_submit("/generate", data, wait_for_completion, timeout, poll_interval)
+
+    def get_v3_job(self, job_id: int) -> Dict[str, Any]:
+        """One v3 job: status, audio, score, diagnostics, billing."""
+        return self.client.request("GET", f"{V3_PREFIX}/jobs/{int(job_id)}")
+
+    def get_score(self, job_id: int) -> Dict[str, Any]:
+        """Just a job's score (``abc``, ``abc_url``, ``midi_url``, ``editable``).
+
+        Raises ``APIError`` (404, ``NO_SCORE``) when the job has no score yet.
+        """
+        return self.client.request("GET", f"{V3_PREFIX}/jobs/{int(job_id)}/score")
+
+    def list_v3_jobs(
+        self,
+        skip: int = 0,
+        limit: int = 50,
+        workflow: Optional[MusicV3Workflow] = None,
+        source_job_id: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Your v3 jobs, newest first.
+
+        Args:
+            skip: Offset.
+            limit: Page size.
+            workflow: Only jobs from one entry point (``"plan"``, ``"edit"``, ...).
+            source_job_id: Only versions derived from this job (one lineage).
+        """
+        params = _drop_none(
+            {"skip": skip, "limit": limit, "workflow": workflow, "source_job_id": source_job_id}
+        )
+        return self.client.request("GET", f"{V3_PREFIX}/jobs", params=params)
+
+    def wait_for_v3_job(
+        self, job_id: int, timeout: int = 900, poll_interval: int = 5
+    ) -> Dict[str, Any]:
+        """Poll a v3 job until it completes.
+
+        Returns the completed job. Raises ``AudioPodError`` if the job fails or
+        is cancelled, and ``TimeoutError`` after ``timeout`` seconds.
+        """
+        if self.async_mode:
+            return self._async_wait_for_v3_job(job_id, timeout, poll_interval)
+        deadline = time.monotonic() + timeout
+        while True:
+            job = self.get_v3_job(job_id)
+            if _v3_finished(job):
+                return job
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"Music job {job_id} did not complete within {timeout} seconds")
+            time.sleep(poll_interval)
+
+    async def _async_wait_for_v3_job(
+        self, job_id: int, timeout: int, poll_interval: int
+    ) -> Dict[str, Any]:
+        import asyncio
+
+        deadline = time.monotonic() + timeout
+        while True:
+            job = await self.get_v3_job(job_id)
+            if _v3_finished(job):
+                return job
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"Music job {job_id} did not complete within {timeout} seconds")
+            await asyncio.sleep(poll_interval)
+
+    def _v3_submit(
+        self,
+        path: str,
+        data: Dict[str, Any],
+        wait_for_completion: bool,
+        timeout: int,
+        poll_interval: int,
+    ) -> Dict[str, Any]:
+        endpoint = f"{V3_PREFIX}{path}"
+        if self.async_mode:
+            return self._async_v3_submit(
+                endpoint, data, wait_for_completion, timeout, poll_interval
+            )
+        job = self.client.request("POST", endpoint, json_data=data)
+        if wait_for_completion:
+            return self.wait_for_v3_job(job["job_id"], timeout, poll_interval)
+        return job
+
+    async def _async_v3_submit(
+        self,
+        endpoint: str,
+        data: Dict[str, Any],
+        wait_for_completion: bool,
+        timeout: int,
+        poll_interval: int,
+    ) -> Dict[str, Any]:
+        job = await self.client.request("POST", endpoint, json_data=data)
+        if wait_for_completion:
+            return await self._async_wait_for_v3_job(job["job_id"], timeout, poll_interval)
+        return job
+
     def _wait_for_music(self, job_id: int, timeout: int) -> Dict[str, Any]:
         """Wait for music generation job completion."""
         import time
@@ -516,3 +908,16 @@ class MusicService(BaseService):
             await asyncio.sleep(5)
 
         raise TimeoutError(f"Music generation {job_id} did not complete within {timeout} seconds")
+
+
+def _v3_finished(job: Dict[str, Any]) -> bool:
+    """True when the job completed; raises when it failed. False while running."""
+    status = str(job.get("status") or "").upper()
+    if status == _V3_DONE:
+        return True
+    if status in _V3_FAILED:
+        raise AudioPodError(
+            f"Music job {job.get('job_id')} {status.lower()}: "
+            f"{job.get('error_message') or 'Unknown error'}"
+        )
+    return False

@@ -91,6 +91,57 @@ result = client.music.generate(
 )
 ```
 
+Every plan now gets the highest-quality music model at the standard rate, so
+the old `quality=` argument is no longer needed. It is still accepted for
+compatibility and is only sent when you pass it.
+
+### Score-first music (v3)
+
+AudioMusic v3 writes the song as an editable score (ABC notation) first and
+renders the audio from that score, so you can read and change the music itself
+before paying for a recording. There is no `duration`: length follows the
+lyrics and the score.
+
+```python
+if client.music.v3_availability()["available"]:
+    # 1. Write the score only (no audio)
+    plan = client.music.compose(
+        style="warm indie folk, fingerpicked guitar, soft male vocal",
+        lyrics="[Verse]\nMorning light on the harbour...",
+        wait_for_completion=True,
+    )
+
+    # 2. Optional: revise it in plain language (coming soon)
+    revised = client.music.revise_score(
+        source_job_id=plan["job_id"],
+        instruction="make the chorus lift, keep the verse as is",
+        wait_for_completion=True,
+    )
+
+    # 3. Record the (complete) score as audio
+    score = client.music.get_score(revised["job_id"])
+    song = client.music.record_score(
+        source_job_id=revised["job_id"], abc=score["abc"], wait_for_completion=True
+    )
+    print(song["audio_url"])
+```
+
+| Method | Endpoint |
+|---|---|
+| `v3_availability()` | `GET /api/v1/music/v3/availability` |
+| `compose(style, lyrics=None, ...)` | `POST /api/v1/music/v3/plan` (score only) |
+| `revise_score(source_job_id, instruction, section=None, bars=None)` | `POST /api/v1/music/v3/revise` |
+| `record_score(source_job_id, abc, ...)` | `POST /api/v1/music/v3/edit` (renders audio) |
+| `generate_v3(style, lyrics=None, abc=None, ...)` | `POST /api/v1/music/v3/generate` (score + audio) |
+| `get_v3_job(job_id)` / `get_score(job_id)` | `GET /api/v1/music/v3/jobs/{id}` / `.../score` |
+| `list_v3_jobs(workflow=None, source_job_id=None)` | `GET /api/v1/music/v3/jobs` |
+| `wait_for_v3_job(job_id)` | polls until `COMPLETED` |
+
+**Coming soon:** `revise_score` and the `description` / `target_seconds` /
+`language` arguments of `compose` are rolling out on the server; until they
+do, those calls answer 404 / 422. `instruction` is at most 500 characters, and
+`lyrics` and `description` are mutually exclusive (checked client-side).
+
 ## Stem Separation
 
 ```python
