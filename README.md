@@ -103,44 +103,55 @@ before paying for a recording. There is no `duration`: length follows the
 lyrics and the score.
 
 ```python
-if client.music.v3_availability()["available"]:
-    # 1. Write the score only (no audio)
+caps = client.music.v3_availability()  # {"available": bool, "revise": bool}
+if caps["available"]:
+    # 1. Write the score only (no audio). Bring your own lyrics, or describe
+    #    the song and AudioPod writes the lyrics first.
     plan = client.music.compose(
-        style="warm indie folk, fingerpicked guitar, soft male vocal",
-        lyrics="[Verse]\nMorning light on the harbour...",
+        description="a hopeful folk song about leaving a harbour town at dawn",
+        target_seconds=150,
         wait_for_completion=True,
     )
 
-    # 2. Optional: revise it in plain language (coming soon)
-    revised = client.music.revise_score(
-        source_job_id=plan["job_id"],
-        instruction="make the chorus lift, keep the verse as is",
-        wait_for_completion=True,
-    )
+    # 2. Optional: change it in plain English (when enabled for your account)
+    if caps.get("revise"):
+        plan = client.music.revise_score(
+            source_job_id=plan["job_id"],
+            instruction="make the chorus higher",
+            section="chorus",
+            idempotency_key="my-retry-safe-key",
+            wait_for_completion=True,
+        )
+        print(plan["note"], plan["score_comparison"]["changed_bars"])  # {"Vocal": [[9, 16]]}
 
-    # 3. Record the (complete) score as audio
-    score = client.music.get_score(revised["job_id"])
-    song = client.music.record_score(
-        source_job_id=revised["job_id"], abc=score["abc"], wait_for_completion=True
-    )
+    # 3. Record the score as audio (omit abc to record the score as it is)
+    song = client.music.record_score(source_job_id=plan["job_id"], wait_for_completion=True)
     print(song["audio_url"])
 ```
 
 | Method | Endpoint |
 |---|---|
 | `v3_availability()` | `GET /api/v1/music/v3/availability` |
-| `compose(style, lyrics=None, ...)` | `POST /api/v1/music/v3/plan` (score only) |
-| `revise_score(source_job_id, instruction, section=None, bars=None)` | `POST /api/v1/music/v3/revise` |
-| `record_score(source_job_id, abc, ...)` | `POST /api/v1/music/v3/edit` (renders audio) |
+| `compose(style=None, lyrics=None, description=None, target_seconds=None, language=None, ...)` | `POST /api/v1/music/v3/plan` (score only) |
+| `revise_score(source_job_id, instruction, section=None, bars=None, idempotency_key=None, ...)` | `POST /api/v1/music/v3/revise` (score only) |
+| `record_score(source_job_id, abc=None, ...)` | `POST /api/v1/music/v3/edit` (renders audio) |
 | `generate_v3(style, lyrics=None, abc=None, ...)` | `POST /api/v1/music/v3/generate` (score + audio) |
 | `get_v3_job(job_id)` / `get_score(job_id)` | `GET /api/v1/music/v3/jobs/{id}` / `.../score` |
 | `list_v3_jobs(workflow=None, source_job_id=None)` | `GET /api/v1/music/v3/jobs` |
 | `wait_for_v3_job(job_id)` | polls until `COMPLETED` |
 
-**Coming soon:** `revise_score` and the `description` / `target_seconds` /
-`language` arguments of `compose` are rolling out on the server; until they
-do, those calls answer 404 / 422. `instruction` is at most 500 characters, and
-`lyrics` and `description` are mutually exclusive (checked client-side).
+Checked client-side before any request (`ValidationError`): `lyrics` and
+`description` are mutually exclusive, `style` is required without a
+`description`, `target_seconds` is 30–300, `instruction` is 1–500 characters,
+`section` at most 60, `bars` 1–10000 with start ≤ end, and `idempotency_key`
+(sent as the `Idempotency-Key` header) at most 200.
+
+Server error codes (in the `APIError` message; nothing is charged for any of
+them): `LYRICS_FAILED` (422), `LYRICS_BUSY` (503), `DESCRIPTION_NOT_ALLOWED`
+(422) on `compose`; `REVISE_FAILED` (422), `REVISE_TARGET_NOT_FOUND` (422),
+`REVISE_IN_FLIGHT` (409), `IDEMPOTENCY_KEY_REUSED` (422), `REVISE_RATE_LIMITED`
+(429), `REVISE_UNAVAILABLE` (503) on `revise_score`; `SCORE_ALREADY_RECORDING`
+(409) on `record_score`.
 
 ## Stem Separation
 

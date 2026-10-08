@@ -76,7 +76,7 @@ def test_compose_posts_plan_with_only_given_fields():
     }
 
 
-def test_compose_sends_coming_soon_fields_when_given():
+def test_compose_from_description_sends_brief_fields():
     svc, client = _svc({"job_id": 1, "status": "PENDING"})
     svc.compose(
         style="folk", lyrics="", description="a song about rain", target_seconds=90, language="en"
@@ -89,11 +89,36 @@ def test_compose_sends_coming_soon_fields_when_given():
     }
 
 
-def test_compose_rejects_lyrics_and_description_together():
+def test_compose_description_without_style():
+    svc, client = _svc({"job_id": 1, "status": "PENDING"})
+    svc.compose(description="a lullaby about the sea")
+    assert client.calls[0][2]["json_data"] == {"description": "a lullaby about the sea"}
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"style": "x", "lyrics": "la la", "description": "rain"},  # XOR
+        {"description": "   "},  # blank description
+        {"description": "x" * 1001},
+        {},  # no style and no description
+        {"style": "  "},
+        {"description": "rain", "target_seconds": 29},
+        {"description": "rain", "target_seconds": 301},
+    ],
+)
+def test_compose_validation(kwargs):
     svc, client = _svc()
     with pytest.raises(ValidationError):
-        svc.compose(style="x", lyrics="la la", description="rain")
+        svc.compose(**kwargs)
     assert client.calls == []
+
+
+def test_compose_target_seconds_bounds_accepted():
+    svc, client = _svc({"job_id": 1, "status": "PENDING"})
+    svc.compose(description="rain", target_seconds=30)
+    svc.compose(description="rain", target_seconds=300)
+    assert len(client.calls) == 2
 
 
 def test_revise_score_body():
@@ -104,6 +129,8 @@ def test_revise_score_body():
         section="Chorus",
         bars={"start": 9, "end": 16},
         allow_tempo_change=False,
+        display_name="Rev A",
+        idempotency_key="  key-123 ",
     )
     method, path, kwargs = client.calls[0]
     assert (method, path) == ("POST", f"{V3}/revise")
@@ -113,13 +140,36 @@ def test_revise_score_body():
         "section": "Chorus",
         "bars": {"start": 9, "end": 16},
         "allow_tempo_change": False,
+        "display_name": "Rev A",
     }
+    assert kwargs["headers"] == {"Idempotency-Key": "key-123"}
 
 
-def test_revise_score_minimal_body():
+def test_revise_score_minimal_body_has_no_headers():
     svc, client = _svc({"job_id": 9, "status": "PENDING"})
     svc.revise_score(5, "brighter")
-    assert client.calls[0][2]["json_data"] == {"source_job_id": 5, "instruction": "brighter"}
+    assert client.calls[0][2] == {"json_data": {"source_job_id": 5, "instruction": "brighter"}}
+
+
+def test_revise_async_sends_idempotency_header():
+    svc, client = _svc({"job_id": 9, "status": "PENDING"}, async_mode=True)
+    asyncio.run(svc.revise_score(5, "brighter", idempotency_key="k"))
+    assert client.calls[0][2]["headers"] == {"Idempotency-Key": "k"}
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"section": "x" * 61},
+        {"idempotency_key": "k" * 201},
+        {"idempotency_key": "  "},
+    ],
+)
+def test_revise_rejects_bad_section_or_key(kwargs):
+    svc, client = _svc()
+    with pytest.raises(ValidationError):
+        svc.revise_score(5, "tighten", **kwargs)
+    assert client.calls == []
 
 
 def test_revise_instruction_limit():
@@ -134,7 +184,14 @@ def test_revise_instruction_limit():
 
 @pytest.mark.parametrize(
     "bars",
-    [{"start": 5}, {"start": 8, "end": 2}, {"start": "1", "end": 2}, {"start": True, "end": 2}],
+    [
+        {"start": 5},
+        {"start": 8, "end": 2},
+        {"start": "1", "end": 2},
+        {"start": True, "end": 2},
+        {"start": 0, "end": 2},
+        {"start": 1, "end": 10001},
+    ],
 )
 def test_revise_rejects_bad_bars(bars):
     svc, client = _svc()
@@ -155,11 +212,42 @@ def test_record_score_posts_edit():
     }
 
 
-def test_record_score_requires_abc():
+def test_record_score_rejects_blank_abc():
     svc, client = _svc()
     with pytest.raises(ValidationError):
         svc.record_score(source_job_id=5, abc="  ")
     assert client.calls == []
+
+
+def test_record_score_without_abc_fetches_source_score():
+    svc, client = _svc({"abc": "X:1\nK:C\nG|\n", "editable": True}, {"job_id": 12})
+    job = svc.record_score(source_job_id=5)
+    assert job == {"job_id": 12}
+    assert client.calls[0] == ("GET", f"{V3}/jobs/5/score", {})
+    assert client.calls[1] == (
+        "POST",
+        f"{V3}/edit",
+        {"json_data": {"source_job_id": 5, "abc": "X:1\nK:C\nG|"}},
+    )
+
+
+def test_record_score_without_abc_async():
+    svc, client = _svc({"abc": "X:1\nK:C\nG|", "editable": True}, {"job_id": 12}, async_mode=True)
+    job = asyncio.run(svc.record_score(source_job_id=5, style="jazz"))
+    assert job == {"job_id": 12}
+    assert [c[1] for c in client.calls] == [f"{V3}/jobs/5/score", f"{V3}/edit"]
+    assert client.calls[1][2]["json_data"] == {
+        "source_job_id": 5,
+        "abc": "X:1\nK:C\nG|",
+        "style": "jazz",
+    }
+
+
+def test_record_score_source_without_score_raises():
+    svc, client = _svc({"abc": None, "editable": False})
+    with pytest.raises(ValidationError):
+        svc.record_score(source_job_id=5)
+    assert len(client.calls) == 1  # fetched the score, never posted /edit
 
 
 def test_generate_v3_posts_generate():
@@ -245,3 +333,35 @@ def test_v2_quality_still_accepted():
     svc, client = _svc({"id": 1})
     svc.song(prompt="pop", lyrics="la", quality="premium")
     assert client.calls[0][2]["json_data"]["quality"] == "premium"
+
+
+# --------------------------------------------------------------------------
+# Transport: per-request headers reach the wire, merged over the defaults
+# --------------------------------------------------------------------------
+
+
+def test_sync_client_merges_per_request_headers(monkeypatch):
+    from audiopod.client import Client
+
+    captured = {}
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"job_id": 1, "status": "PENDING"}
+
+    client = Client(api_key="ap_test")
+
+    def _fake_request(**kwargs):
+        captured.update(kwargs)
+        return _Resp()
+
+    monkeypatch.setattr(client.session, "request", _fake_request)
+    client.music.revise_score(5, "brighter", idempotency_key="abc")
+    assert captured["url"].endswith(f"{V3}/revise")
+    assert captured["headers"]["Idempotency-Key"] == "abc"
+    assert captured["headers"]["Authorization"] == "Bearer ap_test"

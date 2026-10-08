@@ -54,8 +54,14 @@ MusicV3Workflow = Literal["generate", "plan", "edit", "revise"]
 
 V3_PREFIX = "/api/v1/music/v3"
 
-#: Longest ``instruction`` :meth:`MusicService.revise_score` accepts.
+#: Server limits mirrored client-side so bad input fails before a request.
 MAX_REVISE_INSTRUCTION_CHARS = 500
+MAX_REVISE_SECTION_CHARS = 60
+MAX_BAR = 10000
+MAX_IDEMPOTENCY_KEY_CHARS = 200
+MAX_DESCRIPTION_CHARS = 1000
+MIN_TARGET_SECONDS = 30
+MAX_TARGET_SECONDS = 300
 
 _V3_DONE = "COMPLETED"
 _V3_FAILED = ("FAILED", "ERROR", "CANCELLED", "CANCELED")
@@ -532,29 +538,34 @@ class MusicService(BaseService):
     # call. There is no ``duration``: length follows the lyrics / score.
     #
     # In async mode (``AsyncClient``) every method returns an awaitable.
+    #
+    # Errors arrive as ``APIError`` (with ``status_code``); the server's
+    # ``detail.code`` values are listed on each method below. Nothing is
+    # charged when a request is refused with any of them.
     # ------------------------------------------------------------------
 
     def v3_availability(self) -> Dict[str, Any]:
-        """Whether score-first music (AudioMusic v3) is offered.
+        """Whether score-first music (AudioMusic v3) is offered, and which parts.
 
         Always answers, even where v3 is switched off. Hide your v3 surface when
-        ``available`` is false rather than discovering it through 404s.
+        ``available`` is false, and the revise controls when ``revise`` is false,
+        rather than discovering either through 404s.
 
         Returns:
-            ``{"available": bool}``
+            ``{"available": bool, "revise": bool}``
         """
         return self.client.request("GET", f"{V3_PREFIX}/availability")
 
     def compose(
         self,
-        style: str,
+        style: Optional[str] = None,
         lyrics: Optional[str] = None,
         description: Optional[str] = None,
         cot: Optional[MusicV3Cot] = None,
         seed: Optional[int] = None,
         cfg_scale: Optional[float] = None,
         display_name: Optional[str] = None,
-        target_seconds: Optional[float] = None,
+        target_seconds: Optional[int] = None,
         language: Optional[str] = None,
         wait_for_completion: bool = False,
         timeout: int = 900,
@@ -562,38 +573,63 @@ class MusicService(BaseService):
     ) -> Dict[str, Any]:
         """Write a score only, no audio (``POST /music/v3/plan``).
 
-        Review or revise the score, then render it with :meth:`record_score`.
-        Charges a small fixed amount for writing the score; nothing for audio.
+        Start from your own ``lyrics`` (or none, for an instrumental), or from a
+        ``description`` and AudioPod writes the lyrics first, within the same
+        charge. Review or revise the score, then render it with
+        :meth:`record_score`. Charges a small fixed amount; nothing for audio.
 
         Args:
             style: Genre, instrumentation, mood, tempo feel, vocal character
-                (1-2000 chars).
-            lyrics: Lyrics, optionally with ``[Verse]``/``[Chorus]`` tags. Empty
-                or omitted for an instrumental. Mutually exclusive with
-                ``description``.
-            description: COMING SOON - a plain-language brief to write the song
-                from instead of lyrics. Mutually exclusive with ``lyrics``. Until
-                the server supports it, sending it is rejected (422).
+                (max 2000 chars). Required unless ``description`` is given, in
+                which case it defaults to the description.
+            lyrics: Your lyrics, optionally with ``[Verse]``/``[Chorus]`` tags.
+                Omit for an instrumental. Cannot be combined with ``description``.
+            description: Describe the song (topic, mood, genre; 1-1000 chars)
+                and AudioPod writes the lyrics. Cannot be combined with ``lyrics``.
+                The job's ``lyrics_source`` is then ``"audiopod"``.
             cot: ``"full"`` (melody + harmony, the default) or ``"melody"``.
             seed: Reuse a seed to get closer to a previous result (0..2**31-1).
             cfg_scale: How literally to follow ``style`` (1.0-10.0, server
                 default 3.0).
             display_name: Your own name for the track (max 200 chars).
-            target_seconds: COMING SOON - an approximate target length.
-                Rejected (422) until the server supports it.
-            language: COMING SOON - lyric/vocal language code. Rejected (422)
-                until the server supports it.
+            target_seconds: With ``description``: roughly how long the song
+                should be (30-300), used to size the lyrics. A guide, not a
+                guarantee; the score's real length is ``score.duration_seconds``.
+            language: With ``description``: ISO 639-1 code to write the lyrics
+                in (e.g. ``"en"``, ``"hi"``). Defaults to the description's
+                language, else English.
             wait_for_completion: Poll until the score is ready.
             timeout: Max seconds to wait when ``wait_for_completion``.
             poll_interval: Seconds between polls.
 
+        Error codes (``detail.code``): 422 ``LYRICS_FAILED`` (lyrics could not
+        be written), 422 ``DESCRIPTION_NOT_ALLOWED`` (the description asks to
+        reproduce an existing song's words), 503 ``LYRICS_BUSY`` (retry after
+        ``Retry-After``).
+
         Returns:
             The v3 job (``job_id``, ``status``, ``score`` once complete, ...).
         """
-        if lyrics and description:
-            raise ValidationError("Pass either lyrics or description, not both.")
-        if description is not None and not lyrics:
+        if description is not None:
+            if not description.strip():
+                raise ValidationError("description must not be blank.")
+            if len(description) > MAX_DESCRIPTION_CHARS:
+                raise ValidationError(
+                    f"description must be at most {MAX_DESCRIPTION_CHARS} characters."
+                )
+            if lyrics and lyrics.strip():
+                raise ValidationError(
+                    "Pass either description (AudioPod writes the lyrics) or lyrics, not both."
+                )
             lyrics = None  # an empty lyrics string must not ride along with a description
+        elif not style or not style.strip():
+            raise ValidationError("style is required unless description is given.")
+        if target_seconds is not None and not (
+            MIN_TARGET_SECONDS <= target_seconds <= MAX_TARGET_SECONDS
+        ):
+            raise ValidationError(
+                f"target_seconds must be between {MIN_TARGET_SECONDS} and {MAX_TARGET_SECONDS}."
+            )
         data = _drop_none(
             {
                 "style": style,
@@ -616,32 +652,53 @@ class MusicService(BaseService):
         section: Optional[str] = None,
         bars: Optional[Dict[str, int]] = None,
         allow_tempo_change: Optional[bool] = None,
+        display_name: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
         wait_for_completion: bool = False,
         timeout: int = 900,
         poll_interval: int = 5,
     ) -> Dict[str, Any]:
-        """Revise a job's score from a plain-language instruction (``POST /music/v3/revise``).
+        """Change a score in plain English (``POST /music/v3/revise``).
 
-        COMING SOON: the server side of this endpoint is still rolling out;
-        until it does, this call answers 404.
+        Available when enabled for your account: check
+        ``v3_availability()["revise"]``.
 
-        Produces a new score-only job (no audio). Its ``score_comparison`` says
-        what changed, including ``changed_bars``. Render it with
-        :meth:`record_score` when you are happy with it.
+        The result is a NEW score-only job (no audio) linked to the source via
+        ``source_job_id``; the original is kept. ``note`` says what changed and
+        ``score_comparison["changed_bars"]`` says where, as
+        ``{voice: [[start, end], ...]}`` (bars numbered from 1, inclusive).
+        Revise again, or render it with :meth:`record_score`. Each revision is a
+        small fixed charge, kept only if a revised score is delivered.
 
         Args:
             source_job_id: The v3 job whose score you want revised.
-            instruction: What to change, e.g. "make the chorus build more"
+            instruction: What to change, e.g. "make the chorus higher"
                 (1-500 chars).
-            section: Limit the revision to one section, e.g. ``"Chorus"``.
-            bars: Limit the revision to a bar range, ``{"start": 9, "end": 16}``.
-            allow_tempo_change: Permit the revision to change the tempo.
+            section: Limit the change to one section by label (max 60 chars):
+                ``"chorus"`` for every chorus, ``"chorus 2"`` for the second.
+            bars: Limit the change to a bar range, ``{"start": 9, "end": 16}``
+                (numbered from 1, inclusive, 1-10000).
+            allow_tempo_change: Permit the revision to change the tempo (off by
+                default on the server).
+            display_name: Your own name for the revised score (max 200 chars).
+            idempotency_key: Sent as the ``Idempotency-Key`` header (max 200
+                chars). Retrying with the same key within 10 minutes returns the
+                first result and is not charged again.
             wait_for_completion: Poll until the revised score is ready.
             timeout: Max seconds to wait when ``wait_for_completion``.
             poll_interval: Seconds between polls.
 
+        Error codes (``detail.code``): 409 ``REVISE_IN_FLIGHT`` (the same change
+        is already being made), 422 ``REVISE_TARGET_NOT_FOUND`` (no such section
+        or bars), 422 ``REVISE_FAILED`` (the change could not be made as a valid
+        score; rephrase or narrow it), 422 ``INVALID_SCORE``, 422
+        ``IDEMPOTENCY_KEY_REUSED`` (the key was used for a different request),
+        429 ``REVISE_RATE_LIMITED`` (wait ``Retry-After``), 503
+        ``REVISE_UNAVAILABLE`` (retry shortly). 404 when the source is not yours
+        or has no score; 402 when credits are short.
+
         Returns:
-            The new v3 job.
+            The new v3 job (``workflow`` ``"revise"``).
         """
         if not instruction or not instruction.strip():
             raise ValidationError("instruction must not be empty.")
@@ -650,6 +707,10 @@ class MusicService(BaseService):
                 f"instruction must be at most {MAX_REVISE_INSTRUCTION_CHARS} characters "
                 f"(got {len(instruction)})."
             )
+        if section is not None and len(section) > MAX_REVISE_SECTION_CHARS:
+            raise ValidationError(
+                f"section must be at most {MAX_REVISE_SECTION_CHARS} characters."
+            )
         if bars is not None:
             start, end = bars.get("start"), bars.get("end")
             if (
@@ -657,10 +718,20 @@ class MusicService(BaseService):
                 or not isinstance(end, int)
                 or isinstance(start, bool)
                 or isinstance(end, bool)
-                or start > end
+                or not 1 <= start <= end <= MAX_BAR
             ):
-                raise ValidationError('bars must be {"start": int, "end": int} with start <= end.')
+                raise ValidationError(
+                    f'bars must be {{"start": int, "end": int}} with 1 <= start <= end <= {MAX_BAR}.'
+                )
             bars = {"start": start, "end": end}
+        headers = None
+        if idempotency_key is not None:
+            key = idempotency_key.strip()
+            if not key or len(key) > MAX_IDEMPOTENCY_KEY_CHARS:
+                raise ValidationError(
+                    f"idempotency_key must be 1-{MAX_IDEMPOTENCY_KEY_CHARS} characters."
+                )
+            headers = {"Idempotency-Key": key}
         data = _drop_none(
             {
                 "source_job_id": source_job_id,
@@ -668,14 +739,17 @@ class MusicService(BaseService):
                 "section": section,
                 "bars": bars,
                 "allow_tempo_change": allow_tempo_change,
+                "display_name": display_name,
             }
         )
-        return self._v3_submit("/revise", data, wait_for_completion, timeout, poll_interval)
+        return self._v3_submit(
+            "/revise", data, wait_for_completion, timeout, poll_interval, headers=headers
+        )
 
     def record_score(
         self,
         source_job_id: int,
-        abc: str,
+        abc: Optional[str] = None,
         style: Optional[str] = None,
         lyrics: Optional[str] = None,
         cot: Optional[MusicV3Cot] = None,
@@ -689,14 +763,20 @@ class MusicService(BaseService):
     ) -> Dict[str, Any]:
         """Render audio from a complete score (``POST /music/v3/edit``).
 
-        This records a new take from the score you send: sections you did not
-        change are still performed afresh. An identical request for the same
-        source that is still in progress is refused with 409
-        (``SCORE_ALREADY_RECORDING``); poll the ``job_id`` in that error instead.
+        Omit ``abc`` to record the source job's own score exactly as it is (the
+        SDK fetches it with :meth:`get_score` first) — the usual step after
+        :meth:`compose` or :meth:`revise_score`. Pass ``abc`` to record a
+        hand-edited score; it must be the COMPLETE score, not a fragment.
+
+        This records a new take: sections you did not change are still
+        performed afresh. An identical request for the same source that is
+        still in progress is refused with 409 ``SCORE_ALREADY_RECORDING``; poll
+        the ``job_id`` in that error instead. 503 ``MUSIC_JOB_NOT_STARTED`` means
+        nothing was charged and the same request can be retried.
 
         Args:
             source_job_id: The job the score came from.
-            abc: The COMPLETE score in ABC notation (not a fragment).
+            abc: The complete score in ABC notation; omit to use the source's.
             style: Replacement style text; omit to reuse the source's.
             lyrics: Replacement lyrics; omit to reuse the source's.
             cot: ``"melody"`` (server default) lets the arrangement follow the
@@ -713,8 +793,8 @@ class MusicService(BaseService):
         Returns:
             The new v3 job; once complete it carries ``audio_url``.
         """
-        if not abc or not abc.strip():
-            raise ValidationError("abc must be a complete, non-empty score.")
+        if abc is not None and not abc.strip():
+            raise ValidationError("abc must be a complete, non-empty score (or omit it).")
         data = _drop_none(
             {
                 "source_job_id": source_job_id,
@@ -728,7 +808,26 @@ class MusicService(BaseService):
                 "allow_tempo_change": allow_tempo_change,
             }
         )
+        if abc is None:
+            if self.async_mode:
+                return self._async_record_source_score(
+                    data, wait_for_completion, timeout, poll_interval
+                )
+            data["abc"] = _score_abc(self.get_score(source_job_id), source_job_id)
         return self._v3_submit("/edit", data, wait_for_completion, timeout, poll_interval)
+
+    async def _async_record_source_score(
+        self,
+        data: Dict[str, Any],
+        wait_for_completion: bool,
+        timeout: int,
+        poll_interval: int,
+    ) -> Dict[str, Any]:
+        source_job_id = data["source_job_id"]
+        data["abc"] = _score_abc(await self.get_score(source_job_id), source_job_id)
+        return await self._async_v3_submit(
+            f"{V3_PREFIX}/edit", data, wait_for_completion, timeout, poll_interval
+        )
 
     def generate_v3(
         self,
@@ -782,7 +881,8 @@ class MusicService(BaseService):
         return self.client.request("GET", f"{V3_PREFIX}/jobs/{int(job_id)}")
 
     def get_score(self, job_id: int) -> Dict[str, Any]:
-        """Just a job's score (``abc``, ``abc_url``, ``midi_url``, ``editable``).
+        """Just a job's score (``abc``, ``abc_url``, ``midi_url``, ``editable``,
+        ``source``, ``duration_seconds``).
 
         Raises ``APIError`` (404, ``NO_SCORE``) when the job has no score yet.
         """
@@ -848,13 +948,17 @@ class MusicService(BaseService):
         wait_for_completion: bool,
         timeout: int,
         poll_interval: int,
+        headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         endpoint = f"{V3_PREFIX}{path}"
         if self.async_mode:
             return self._async_v3_submit(
-                endpoint, data, wait_for_completion, timeout, poll_interval
+                endpoint, data, wait_for_completion, timeout, poll_interval, headers
             )
-        job = self.client.request("POST", endpoint, json_data=data)
+        kwargs: Dict[str, Any] = {"json_data": data}
+        if headers:
+            kwargs["headers"] = headers
+        job = self.client.request("POST", endpoint, **kwargs)
         if wait_for_completion:
             return self.wait_for_v3_job(job["job_id"], timeout, poll_interval)
         return job
@@ -866,8 +970,12 @@ class MusicService(BaseService):
         wait_for_completion: bool,
         timeout: int,
         poll_interval: int,
+        headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
-        job = await self.client.request("POST", endpoint, json_data=data)
+        kwargs: Dict[str, Any] = {"json_data": data}
+        if headers:
+            kwargs["headers"] = headers
+        job = await self.client.request("POST", endpoint, **kwargs)
         if wait_for_completion:
             return await self._async_wait_for_v3_job(job["job_id"], timeout, poll_interval)
         return job
@@ -921,3 +1029,11 @@ def _v3_finished(job: Dict[str, Any]) -> bool:
             f"{job.get('error_message') or 'Unknown error'}"
         )
     return False
+
+
+def _score_abc(score: Dict[str, Any], job_id: int) -> str:
+    """The ABC text of a fetched score, or a clear error when there is none."""
+    abc = score.get("abc") if isinstance(score, dict) else None
+    if not isinstance(abc, str) or not abc.strip():
+        raise ValidationError(f"Job {job_id} has no score to record; pass abc explicitly.")
+    return abc.strip()

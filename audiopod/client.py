@@ -187,18 +187,21 @@ class Client(BaseClient):
         json_data: Optional[Dict[str, Any]] = None,
         files: Optional[Dict[str, Any]] = None,
         params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """Make API request."""
         url = urljoin(self.config.base_url, endpoint)
-        headers = self._get_headers()
+        request_headers = self._get_headers()
+        if headers:
+            request_headers.update(headers)
 
         if files:
-            headers.pop("Content-Type", None)
+            request_headers.pop("Content-Type", None)
 
         response = self.session.request(
             method=method,
             url=url,
-            headers=headers,
+            headers=request_headers,
             data=data,
             json=json_data,
             files=files,
@@ -280,6 +283,7 @@ class AsyncClient(BaseClient):
         json_data: Optional[Dict[str, Any]] = None,
         files: Optional[Dict[str, Any]] = None,
         params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """Make async API request."""
         url = urljoin(self.config.base_url, endpoint)
@@ -311,7 +315,7 @@ class AsyncClient(BaseClient):
                 url=url,
                 data=payload,
                 params=params,
-                headers={"Content-Type": payload.content_type},
+                headers={**(headers or {}), "Content-Type": payload.content_type},
             ) as response:
                 return await self._handle_async_response(response)
 
@@ -321,6 +325,7 @@ class AsyncClient(BaseClient):
             json=json_data,
             data=data,
             params=params,
+            headers=headers,
         ) as response:
             return await self._handle_async_response(response)
 
