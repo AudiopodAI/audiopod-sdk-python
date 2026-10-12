@@ -60,14 +60,23 @@ def test_auto_direct_omits_chapter_ids_when_directing_the_whole_book():
     assert client.calls[0][2]["json_data"] == {}
 
 
-@pytest.mark.parametrize("empty", [None, []])
-def test_an_empty_chapter_subset_still_means_the_whole_book(empty):
+def test_none_chapter_subset_means_the_whole_book():
     client = _RecordingClient([{"job_id": "1", "total_chapters": 1}])
     service = AudiobookService(client, async_mode=False)
 
-    service.auto_direct("proj_abc", chapter_ids=empty)
+    service.auto_direct("proj_abc", chapter_ids=None)
 
     assert "chapter_ids" not in client.calls[0][2]["json_data"]
+
+
+def test_an_empty_chapter_subset_is_rejected_not_widened():
+    """PLAT-3944: ``[]`` used to be dropped and re-direct the whole book."""
+    client = _RecordingClient([{"job_id": "1", "total_chapters": 1}])
+    service = AudiobookService(client, async_mode=False)
+
+    with pytest.raises(ValueError, match="chapter_ids is empty"):
+        service.auto_direct("proj_abc", chapter_ids=[])
+    assert client.calls == []
 
 
 def test_auto_direct_scopes_to_a_chapter_subset():

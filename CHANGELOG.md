@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.10.1
+
+### Fixed — an empty selection no longer means "the whole book" (PLAT-3944)
+
+`auto_direct`, `batch_narrate`, `start_narration` and `start_export` (and the
+wrappers built on them) now raise `ValueError` for an explicitly empty
+`chapter_ids`, `paragraph_ids` or `include_chapters` list, e.g.
+`chapter_ids is empty; pass None to use the whole book`. Previously
+`auto_direct(chapter_ids=[])` dropped the list and directed the whole book
+again. Pass `None` (or omit the argument) to use the whole book; the API itself
+now rejects an empty list with 400 `empty_selection`.
+
 ## 2.10.0
 
 ### Added — Score-first music (v3)

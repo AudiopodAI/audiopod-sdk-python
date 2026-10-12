@@ -25,6 +25,17 @@ _PARSE_PENDING_STATUSES = frozenset({"draft", "parsing", "pending", "queued"})
 _PARSE_FAILED_STATUSES = frozenset({"failed", "error", "canceled", "cancelled"})
 
 
+def _check_selection(name: str, value: Optional[List[Any]]) -> None:
+    """Reject an explicit empty selection list before it reaches the server.
+
+    ``None`` means "the whole book". An empty list used to be read the same
+    way and re-billed the whole book; the API now answers it with 400
+    ``empty_selection`` (PLAT-3943), so fail fast with a clear message.
+    """
+    if value is not None and len(value) == 0:
+        raise ValueError(f"{name} is empty; pass None to use the whole book")
+
+
 class AudiobookService(BaseService):
     """
     Service for automated audiobook production.
@@ -335,7 +346,12 @@ class AudiobookService(BaseService):
         To re-narrate a book that is already finished, pass
         ``include_completed=True`` — otherwise every paragraph is skipped and
         the call 400s with "No eligible paragraphs to narrate".
+
+        Raises ``ValueError`` if a selection list (``chapter_ids`` / ``paragraph_ids``) is passed
+        explicitly empty; pass ``None`` to use the whole book.
         """
+        _check_selection("chapter_ids", chapter_ids)
+        _check_selection("paragraph_ids", paragraph_ids)
         body: Dict[str, Any] = {
             "include_completed": include_completed,
             "include_locked": include_locked,
@@ -402,12 +418,15 @@ class AudiobookService(BaseService):
 
         Raises :class:`~audiopod.exceptions.APIError` with ``status_code`` 409
         when a direction run is already in flight for this project.
+
+        Raises ``ValueError`` if ``chapter_ids`` is an explicit empty list;
+        pass ``None`` to direct the whole book.
         """
+        _check_selection("chapter_ids", chapter_ids)
         body: Dict[str, Any] = {}
-        # Omit the key entirely when no subset is given — the server reads its
-        # absence as "the whole book", while an empty list would scope the run
-        # to nothing and 400 with "No chapters found to direct".
-        if chapter_ids:
+        # Omit the key when no subset is given — the server reads its absence
+        # as "the whole book". A non-None list is always sent.
+        if chapter_ids is not None:
             body["chapter_ids"] = chapter_ids
         path = f"{_BASE}/projects/{project_id}/direction/auto"
         if self.async_mode:
@@ -531,7 +550,11 @@ class AudiobookService(BaseService):
 
         ``batch`` narrates the whole project when no ``chapter_ids`` are given,
         which is what this method has always meant.
+
+        Raises ``ValueError`` if ``chapter_ids`` is an explicit empty list;
+        pass ``None`` to narrate the whole book.
         """
+        _check_selection("chapter_ids", chapter_ids)
         body: Dict[str, Any] = {
             "voice_id": voice_id,
             # The batch worker reads speed/style out of narration_settings under
@@ -620,7 +643,12 @@ class AudiobookService(BaseService):
 
     # -------------------------------------------------------------------- export
     def start_export(self, project_id: str, include_chapters: Optional[List[str]] = None) -> Dict[str, Any]:
-        """Start an ACX export (runs a compliance check). Returns a ``job_id`` + ``compliance_check``."""
+        """Start an ACX export (runs a compliance check). Returns a ``job_id`` + ``compliance_check``.
+
+        Raises ``ValueError`` if ``include_chapters`` is an explicit empty list;
+        pass ``None`` to export the whole book.
+        """
+        _check_selection("include_chapters", include_chapters)
         body: Dict[str, Any] = {}
         if include_chapters is not None:
             body["include_chapters"] = include_chapters
