@@ -1,5 +1,35 @@
 # Changelog
 
+## 2.12.0 — 2026-10-16
+
+### Added — sentence-level re-narration (PLAT-3970)
+
+When you edit a paragraph that is already narrated, AudioPod re-narrates only
+the sentences you changed when the edit is small (otherwise the whole passage)
+and bills only the changed sentences' characters. A passage's first
+regeneration is free, and if a sentence-level take does not blend in, the whole
+passage is re-narrated at no extra charge beyond the quote.
+
+- `narrate_paragraph(..., mode=)` — `"auto"` (server default) narrates only
+  the changed sentences when the edit is small, otherwise the whole passage;
+  `"sentence"` requires it (409 `sentence_mode_unavailable` with a `reason`
+  when not possible); `"passage"` always narrates the whole passage.
+- `batch_narrate(..., mode=)` — `"auto"` or `"passage"`. The response adds
+  `skipped_no_audible_change`.
+- `cost_estimate(project_id, chapter_id=, paragraph_id=, mode=)` — new
+  optional filters and `mode` (`"auto"` or `"passage"`).
+- An edit with no audible change (quote marks, spacing) returns
+  `status: "skipped"` with `billing.reason == "no_audible_change"`, no charge.
+- Typed responses: `NarrateParagraphResponse`, `NarrationBilling` (`mode`,
+  `billed_chars`, `passage_chars`, `changed_sentences`, `reason`),
+  `BatchNarrationResponse`, `ParagraphTake` (`kind`, `base_take_id`,
+  `changed_ranges`) and `SentenceEditsBreakdown` (`breakdown.sentence_edits` on
+  the project cost) in `audiopod.services.audiobook`.
+- `get_cost(project_id)` — new: `GET /audiobook/projects/{id}/cost`, the book's
+  actual cost (`totals`, `breakdown`, `chapters`, `partial`, `notes`, `as_of`),
+  typed as `ProjectCost`.
+- Invalid `mode` values raise `ValueError` before any request.
+
 ## 2.11.1 — 2026-10-16
 
 ### Fixed — readable API errors when `detail` is an object (PLAT-3961)
