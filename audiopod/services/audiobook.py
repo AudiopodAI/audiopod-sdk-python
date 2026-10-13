@@ -108,6 +108,58 @@ class SentenceEditsBreakdown(TypedDict, total=False):
     free_count: int
 
 
+class CostAmount(TypedDict, total=False):
+    characters: int
+    cents: int
+    credits: int
+
+
+class CostRegenerations(CostAmount, total=False):
+    count: int
+
+
+class CostTotals(TypedDict, total=False):
+    charged_cents: int
+    refunded_cents: int
+    net_cents: int
+    charged_credits: int
+    refunded_credits: int
+    net_credits: int
+    characters_billed: int
+
+
+class CostBreakdown(TypedDict, total=False):
+    first_narration: CostAmount
+    regenerations: CostRegenerations
+    free_regenerations: int
+    review_approvals: int
+    sentence_edits: SentenceEditsBreakdown
+
+
+class ChapterCost(TypedDict, total=False):
+    chapter_id: str
+    chapter_number: int
+    title: str
+    characters: int
+    cents: int
+    credits: int
+
+
+class ProjectCost(TypedDict, total=False):
+    """Response of ``get_cost``: what narrating the book has actually cost."""
+
+    project_id: str
+    currency: str
+    #: ``"api_wallet"``, ``"credits"`` or ``"mixed"``.
+    billing_lane: str
+    totals: CostTotals
+    breakdown: CostBreakdown
+    chapters: List[ChapterCost]
+    partial: bool
+    notes: List[str]
+    as_of: str
+
+
 def _check_mode(mode: Optional[str], allowed: Tuple[str, ...]) -> None:
     if mode is not None and mode not in allowed:
         raise ValueError(f"mode must be one of {', '.join(allowed)}; got {mode!r}")
@@ -675,6 +727,16 @@ class AudiobookService(BaseService):
         if self.async_mode:
             return self._async_request("GET", path, params=params or None)
         return self.client.request("GET", path, params=params or None)
+
+    def get_cost(self, project_id: str) -> ProjectCost:
+        """What narrating this book has actually cost so far, read from billing
+        records (not estimated): ``totals``, ``breakdown`` (incl.
+        ``sentence_edits``), per-``chapters`` net, ``partial``, ``notes``,
+        ``as_of``. Every ``*_cents`` value is US cents."""
+        path = f"{_BASE}/projects/{project_id}/cost"
+        if self.async_mode:
+            return self._async_request("GET", path)
+        return self.client.request("GET", path)
 
     # ----------------------------------------------------------------- narration
     def start_narration(

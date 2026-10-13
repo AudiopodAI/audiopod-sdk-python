@@ -94,3 +94,11 @@ def test_cost_estimate_without_options_sends_no_params():
     client = _RecordingClient()
     _svc(client).cost_estimate("p")
     assert client.calls[0][2]["params"] is None
+
+
+def test_get_cost_reads_project_cost():
+    reply = {"project_id": "p", "breakdown": {"sentence_edits": {"count": 2, "free_count": 1}}}
+    client = _RecordingClient(reply)
+    out = _svc(client).get_cost("p")
+    assert client.calls[0][:2] == ("GET", "/api/v1/audiobook/projects/p/cost")
+    assert out["breakdown"]["sentence_edits"]["count"] == 2
