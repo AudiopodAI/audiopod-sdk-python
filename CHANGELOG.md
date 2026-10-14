@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.11.0 — 2026-10-14
 
 ### Added — `create_voice(..., wait_for_ready=True)` (PLAT-3976)
 
