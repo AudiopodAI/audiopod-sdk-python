@@ -13,7 +13,7 @@ import asyncio
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -32,7 +32,10 @@ class _Echo(BaseHTTPRequestHandler):
             if ctype.startswith("application/x-www-form-urlencoded")
             else {}
         )
-        payload = json.dumps({"id": 1, "job_id": 1, "ctype": ctype, "fields": fields}).encode()
+        query = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
+        payload = json.dumps(
+            {"id": 1, "job_id": 1, "ctype": ctype, "fields": fields, "query": query}
+        ).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
@@ -97,3 +100,20 @@ def test_async_form_repeats_list_values_and_drops_none(base_url):
 
     echo = asyncio.run(run())
     assert echo["fields"] == {"k": ["a", "b"], "b": "True"}
+
+
+def test_sync_diarize_sends_num_speakers_as_query_and_url_as_form(base_url):
+    client = Client(api_key="ap_test", base_url=base_url, max_retries=0)
+    echo = client.speaker.diarize(url="https://example.com/a.mp3", num_speakers=2)
+    assert echo["fields"] == {"url": "https://example.com/a.mp3"}
+    assert echo["query"] == {"num_speakers": "2"}
+
+
+def test_async_diarize_sends_num_speakers_as_query(base_url):
+    async def run():
+        async with AsyncClient(api_key="ap_test", base_url=base_url) as client:
+            return await client.speaker.diarize(url="https://example.com/a.mp3", num_speakers=3)
+
+    echo = asyncio.run(run())
+    assert echo["fields"] == {"url": "https://example.com/a.mp3"}
+    assert echo["query"] == {"num_speakers": "3"}

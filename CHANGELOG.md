@@ -19,6 +19,17 @@ The mode is now sent as the API's `quality_mode` field. It used to be sent as
 `mode` now defaults to `None` (server default, `"studio"`), which keeps that
 behaviour for callers that never set it.
 
+### Fixed — `music.generate(..., wait_for_completion=True)` polls the right job
+
+The create endpoints answer `{"job": {"id": N}, "message": ...}`; the SDK read
+only a flat `id` / `job_id` and polled job `None`. Same fix for `instrumental`,
+`song`, `rap`, `cover`, `reference` and `extract_stem`.
+
+### Fixed — `speaker.diarize(num_speakers=...)` is honoured
+
+The API reads `num_speakers` from the query string; it was sent as a form field
+and dropped. Sync and async clients both send it as a query parameter now.
+
 ### Docs
 
 README opens with a one-call quickstart per task and a "Using with AI agents"

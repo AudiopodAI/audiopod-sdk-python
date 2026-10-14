@@ -71,6 +71,20 @@ def _drop_none(data: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in data.items() if v is not None}
 
 
+def _created_job_id(response: Dict[str, Any]) -> Any:
+    """Job id from a create response.
+
+    The v2 create endpoints answer ``{"job": {"id": ...}, "message": ...}``;
+    without the nested lookup ``wait_for_completion=True`` polled job ``None``
+    (PLAT-3976). Flat ``id`` / ``job_id`` are kept for other shapes.
+    """
+    return (
+        response.get("id")
+        or response.get("job_id")
+        or (response.get("job") or {}).get("id")
+    )
+
+
 class MusicService(BaseService):
     """Service for AI music generation using AudioMusic V2."""
 
@@ -167,7 +181,7 @@ class MusicService(BaseService):
         response = self.client.request("POST", endpoint, json_data=data)
 
         if wait_for_completion:
-            job_id = response.get("id") or response.get("job_id")
+            job_id = _created_job_id(response)
             return self._wait_for_music(job_id, timeout)
         return response
 
@@ -176,7 +190,7 @@ class MusicService(BaseService):
     ) -> Dict[str, Any]:
         response = await self.client.request("POST", endpoint, json_data=data)
         if wait_for_completion:
-            job_id = response.get("id") or response.get("job_id")
+            job_id = _created_job_id(response)
             return await self._async_wait_for_music(job_id, timeout)
         return response
 
@@ -295,7 +309,7 @@ class MusicService(BaseService):
 
         response = self.client.request("POST", endpoint, json_data=data)
         if wait_for_completion:
-            job_id = response.get("id") or response.get("job_id")
+            job_id = _created_job_id(response)
             return self._wait_for_music(job_id, timeout)
         return response
 
@@ -354,7 +368,7 @@ class MusicService(BaseService):
 
         response = self.client.request("POST", endpoint, json_data=data)
         if wait_for_completion:
-            job_id = response.get("id") or response.get("job_id")
+            job_id = _created_job_id(response)
             return self._wait_for_music(job_id, timeout)
         return response
 
@@ -413,7 +427,7 @@ class MusicService(BaseService):
 
         response = self.client.request("POST", endpoint, json_data=data)
         if wait_for_completion:
-            job_id = response.get("id") or response.get("job_id")
+            job_id = _created_job_id(response)
             return self._wait_for_music(job_id, timeout)
         return response
 
@@ -485,7 +499,7 @@ class MusicService(BaseService):
 
         response = self.client.request("POST", endpoint, json_data=data)
         if wait_for_completion:
-            job_id = response.get("id") or response.get("job_id")
+            job_id = _created_job_id(response)
             return self._wait_for_music(job_id, timeout)
         return response
 
