@@ -210,10 +210,13 @@ def cmd_stems(args: argparse.Namespace) -> None:
 
 def cmd_clone(args: argparse.Namespace) -> None:
     client = _client(args)
+    # Wait until the clone is usable: speech with a PENDING voice fails.
     voice = client.voice.create_voice(
         name=args.name,
-        description=args.description or "",
-        files=[args.reference],
+        audio_file=args.reference,
+        description=args.description or None,
+        wait_for_ready=True,
+        timeout=args.timeout,
     )
     _print(args, voice)
 
@@ -320,6 +323,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_cl.add_argument("reference", help="Path to a 5–30s reference audio file.")
     p_cl.add_argument("--name", required=True)
     p_cl.add_argument("--description", default=None)
+    p_cl.add_argument("--timeout", type=int, default=300)
     p_cl.set_defaults(func=cmd_clone)
 
     p_ab = sub.add_parser("audiobook", help="Produce an ACX audiobook from a manuscript (PDF/EPUB/DOCX/TXT).")
@@ -347,7 +351,8 @@ def main(argv: Optional[list[str]] = None) -> None:
     except AuthenticationError as exc:
         sys.stderr.write(f"auth error: {exc}\n")
         sys.exit(2)
-    except AudioPodError as exc:
+    except (AudioPodError, TimeoutError) as exc:
+        # The SDK's waits raise the built-in TimeoutError.
         sys.stderr.write(f"audiopod: {exc}\n")
         sys.exit(1)
     except KeyboardInterrupt:

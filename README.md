@@ -1,28 +1,48 @@
 # AudioPod Python SDK
 
-Official Python SDK for [AudioPod AI](https://audiopod.ai) — an all-in-one AI
-**audio** platform: music generation, text-to-speech (with directing), voice
-cloning, stem separation, transcription, speaker separation, noise reduction,
-translation, and audiobook production.
+Add **speech-to-text with speaker labels, text-to-speech, voice cloning, stem
+separation / vocal removal, audio-to-MIDI, music generation and noise
+reduction** to a Python app with one package and one API key.
 
-This SDK is the **Platform (API + Agent)** surface of AudioPod — the developer
-entry point alongside the [Node.js SDK](https://www.npmjs.com/package/audiopod),
-the CLI, and the MCP server. **Start free** — mint a key, get free credits to
-try, no card required. API usage is **pay-as-you-go** ($1 = 7,500 credits,
-credits never expire). Get a key at
-[audiopod.ai/dashboard/account/api-keys](https://www.audiopod.ai/dashboard/account/api-keys).
+```bash
+pip install audiopod
+export AUDIOPOD_API_KEY=ap_...   # https://audiopod.ai/dashboard/account/api-keys
+```
+
+```python
+from audiopod import Client
+job = Client().transcription.transcribe(url="https://example.com/talk.mp3", speaker_diarization=True, wait_for_completion=True)
+print(job["id"], job["status"])
+```
+
+| Job | Method | Guide |
+|---|---|---|
+| Speech to text, speaker diarization, subtitles | `client.transcription.transcribe(...)` | [transcription](https://docs.audiopod.ai/quickstarts/transcription) |
+| Text to speech (500+ voices, inline directing) | `client.voice.generate_speech(...)` | [text-to-speech](https://docs.audiopod.ai/quickstarts/text-to-speech) |
+| Voice cloning | `client.voice.create_voice(..., wait_for_ready=True)` | [voice cloning](https://docs.audiopod.ai/quickstarts/voice-cloning) |
+| Stem separation, vocal remover, karaoke | `client.stem_extraction.separate(...)` | [stems](https://docs.audiopod.ai/quickstarts/stem-separation) |
+| Audio to MIDI | `client.midi.convert(...)` | [MIDI](https://docs.audiopod.ai/quickstarts/audio-to-midi) |
+| Music generation | `client.music.generate(...)` | [music](https://docs.audiopod.ai/quickstarts/music) |
+| Noise reduction | `client.denoiser.denoise(...)` | [noise reduction](https://docs.audiopod.ai/quickstarts/noise-reduction) |
+| Speaker separation | `client.speaker.diarize(...)` | [speakers](https://docs.audiopod.ai/api-reference/speaker-separation) |
+
+**Billing:** API-key requests are paid from a prepaid USD **API wallet** first
+and, when it can't cover a job, from your account's plan or pay-as-you-go
+credits. Your first API key comes with a $1 starter credit in the wallet
+(verified email). See wallet rates with `client.wallet.get_pricing()`; top up
+the wallet from the [API keys page](https://audiopod.ai/dashboard/account/api-keys)
+or add credits at [audiopod.ai/pricing](https://audiopod.ai/pricing). Coding agents:
+read [AGENTS.md](AGENTS.md).
+
+This SDK is the **Platform (API + Agent)** surface of AudioPod, alongside the
+[Node.js SDK](https://www.npmjs.com/package/audiopod), the `audiopod` CLI, and
+the MCP server.
 
 [![Run in Postman](https://run.pstmn.io/button.svg)](https://god.gw.postman.com/run-collection/58401244-916ddbda-1a70-4c07-8ccd-fe524703a84b?action=collection%2Ffork&source=rip_markdown&collection-url=entityId%3D58401244-916ddbda-1a70-4c07-8ccd-fe524703a84b%26entityType%3Dcollection%26workspaceId%3D8013472d-5897-47d1-bf5c-92683a027b35&utm_source=audiopod-sdk-python)
 
 Want to see a response before installing anything? The **Getting Started**
 collection reaches a real `200` in two requests with no account and no API key.
 [More about the collections](https://docs.audiopod.ai/sdks/postman).
-
-## Installation
-
-```bash
-pip install audiopod
-```
 
 ## Quick start: one call per task
 
@@ -122,8 +142,9 @@ Word-level timestamps (for follow-along / karaoke UIs) and **Voice Design**
 ## Voice Cloning
 
 ```python
-# Instant clone from a 5–30s reference clip
-voice = client.voice.create_voice(name="My Voice", audio_file="sample.wav")
+# Instant clone from a 5–30s reference clip. A new clone is PENDING while it
+# processes; wait_for_ready=True returns once it is COMPLETED and usable.
+voice = client.voice.create_voice(name="My Voice", audio_file="sample.wav", wait_for_ready=True)
 
 # Reuse the clone for TTS
 job = client.voice.generate_speech(
@@ -317,10 +338,11 @@ from audiopod.exceptions import (
 try:
     client = Client()
     job = client.voice.generate_speech(voice_id=368, text="Hello")
-except AuthenticationError:
-    print("Invalid API key")
+except AuthenticationError as e:
+    print(e)  # says to set AUDIOPOD_API_KEY and where to create a key
 except InsufficientBalanceError as e:
-    print(f"Need to top up: required {e.required_cents} cents")
+    print(e)  # explains the API wallet and how to top it up
+    print(f"required {e.required_cents} cents, available {e.available_cents}")
 except RateLimitError:
     print("Rate limit exceeded, try again later")
 except APIError as e:
