@@ -24,22 +24,76 @@ collection reaches a real `200` in two requests with no account and no API key.
 pip install audiopod
 ```
 
-## Quick Start
+## Quick start: one call per task
+
+Set `AUDIOPOD_API_KEY` (or pass `api_key="ap_..."`), then each task is one
+call that waits for the job and returns its output links.
+
+**Transcribe with speaker labels**
 
 ```python
 from audiopod import Client
-
-# Reads AUDIOPOD_API_KEY, or pass api_key="ap_your_api_key"
 client = Client()
+job = client.transcription.transcribe(url="https://example.com/interview.mp3", speaker_diarization=True, wait_for_completion=True)
+for seg in client.transcription.get_transcript(job["id"])["segments"]:
+    print(seg.get("speaker_label"), seg["text"])
+```
 
-# Text-to-speech
-job = client.voice.generate_speech(
-    voice_id=368,
-    text="Welcome to AudioPod.",
-    wait_for_completion=True,
-)
+**Split a song into stems**
+
+```python
+from audiopod import Client
+client = Client()
+job = client.stem_extraction.separate(file="song.mp3", mode="four")  # vocals, drums, bass, other
+for stem, link in job["download_urls"].items():
+    print(stem, link)
+```
+
+**Text to speech**
+
+```python
+from audiopod import Client
+client = Client()
+job = client.voice.generate_speech(voice_id=368, text="Welcome to AudioPod.", wait_for_completion=True)
 print(job["output_url"])
 ```
+
+**Generate music**
+
+```python
+from audiopod import Client
+client = Client()
+track = client.music.generate(prompt="lo-fi hip hop, 80 BPM, soft piano", duration=60, wait_for_completion=True)
+print(track["output_url"])
+```
+
+**Audio to MIDI / noise removal**
+
+```python
+from audiopod import Client
+client = Client()
+print(client.midi.convert(file="song.mp3")["merged_midi_url"])
+print(client.denoiser.denoise(file="voice-memo.m4a")["output_url"])
+```
+
+Step-by-step guides for each task start at
+[docs.audiopod.ai/quickstarts/transcription](https://docs.audiopod.ai/quickstarts/transcription).
+
+## Using with AI agents
+
+- **Coding agents (Claude Code, Cursor, Copilot, Windsurf):** tell the agent to
+  use the `audiopod` package and point it at
+  [docs.audiopod.ai/llms.txt](https://docs.audiopod.ai/llms.txt). Every docs page
+  is also served as Markdown: add `.md` to its URL.
+- **Agents as tools (MCP):** connect `https://mcp.audiopod.ai/core` (transcribe,
+  stems, cleanup, MIDI) or `https://mcp.audiopod.ai` (adds speech, voices and
+  music). Sign-in is OAuth; an `X-API-Key` header works for CI.
+- **Claude Code plugin:** `/plugin marketplace add AudiopodAI/claude-plugin`, then
+  `/plugin install audiopod@audiopod`.
+- **ChatGPT:** add `https://mcp.audiopod.ai/core` as a connector in developer mode.
+
+Setup for every client, plus copy-paste prompts:
+[AudioPod for AI agents](https://docs.audiopod.ai/agents).
 
 ## Text-to-Speech
 
@@ -212,7 +266,7 @@ clean = client.denoiser.denoise(audio_file="noisy.mp3", mode="studio", wait_for_
 dubbed = client.translation.translate(audio_file="clip.mp3", target_language="es")
 
 # Audiobook production (manuscript → ACX-ready export)
-project = client.audiobook.create_project(title="My Book", author="Jane Doe")
+project = client.audiobook.create_project(title="My Book", author="J. Doe")
 ```
 
 ## OpenAI-Compatible Endpoints

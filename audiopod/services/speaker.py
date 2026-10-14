@@ -31,27 +31,35 @@ class SpeakerService(BaseService):
             Job dict with speaker segments when completed
         """
         data = {}
-        if num_speakers:
-            data["num_speakers"] = num_speakers
         if url:
             data["url"] = url
+        # The API reads num_speakers from the query string, not the form body;
+        # sent as a form field it was silently dropped (PLAT-3976).
+        params = {"num_speakers": num_speakers} if num_speakers else None
 
         files = self._prepare_file_upload(audio_file, "file") if audio_file else None
 
         if self.async_mode:
-            return self._async_diarize(data, files, wait_for_completion, timeout)
+            return self._async_diarize(data, files, params, wait_for_completion, timeout)
 
-        response = self.client.request("POST", "/api/v1/speaker/diarize", data=data, files=files)
+        response = self.client.request(
+            "POST", "/api/v1/speaker/diarize", data=data, files=files, params=params
+        )
 
         if wait_for_completion:
             return self._wait_for_completion(response["id"], timeout)
         return response
 
     async def _async_diarize(
-        self, data: Dict, files: Optional[Dict], wait_for_completion: bool, timeout: int
+        self,
+        data: Dict,
+        files: Optional[Dict],
+        params: Optional[Dict],
+        wait_for_completion: bool,
+        timeout: int,
     ) -> Dict[str, Any]:
         response = await self.client.request(
-            "POST", "/api/v1/speaker/diarize", data=data, files=files
+            "POST", "/api/v1/speaker/diarize", data=data, files=files, params=params
         )
         if wait_for_completion:
             return await self._async_wait_for_completion(response["id"], timeout)

@@ -19,7 +19,7 @@ class DenoiserService(BaseService):
         self,
         file: Optional[str] = None,
         url: Optional[str] = None,
-        mode: str = "balanced",
+        mode: Optional[str] = None,
         wait_for_completion: bool = True,
         timeout: int = 300,
         # Legacy parameter name
@@ -31,7 +31,10 @@ class DenoiserService(BaseService):
         Args:
             file: Path to local audio file
             url: URL of audio file
-            mode: Denoise mode ("balanced", "studio", or "ultra")
+            mode: Quality mode: "balanced" (fastest), "studio" (broadcast and
+                podcast quality) or "ultra" (highest fidelity). Sent as the
+                API's ``quality_mode`` field; leave it unset for the server
+                default ("studio").
             wait_for_completion: Wait for completion (default: True)
             timeout: Max wait time in seconds
 
@@ -41,7 +44,12 @@ class DenoiserService(BaseService):
         # Support both 'file' and legacy 'audio_file' parameter names
         audio_file = file or audio_file
         
-        data = {"mode": mode}
+        # The API field is ``quality_mode``. Earlier releases sent ``mode``,
+        # which the server ignored, so every job ran at the "studio" default;
+        # leaving ``mode`` unset keeps that behaviour.
+        data: Dict[str, Any] = {}
+        if mode is not None:
+            data["quality_mode"] = mode
         if url:
             data["url"] = url
 

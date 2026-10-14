@@ -5,7 +5,7 @@ AudioPod API Client
 import os
 import logging
 from typing import Optional, Dict, Any
-from urllib.parse import urljoin
+from urllib.parse import urlencode, urljoin
 
 import requests
 import aiohttp
@@ -195,7 +195,11 @@ class Client(BaseClient):
         if headers:
             request_headers.update(headers)
 
-        if files:
+        if files or (data is not None and json_data is None):
+            # Form posts (multipart or urlencoded): let requests set the
+            # Content-Type. The JSON default would make the server ignore
+            # every form field (a URL-only denoise or a TTS request lost its
+            # fields this way).
             request_headers.pop("Content-Type", None)
 
         response = self.session.request(
@@ -316,6 +320,28 @@ class AsyncClient(BaseClient):
                 data=payload,
                 params=params,
                 headers={**(headers or {}), "Content-Type": payload.content_type},
+            ) as response:
+                return await self._handle_async_response(response)
+
+        if data is not None and json_data is None:
+            # A form post without files: urlencode it and override the
+            # session's JSON Content-Type, or the server ignores the fields.
+            # Same encoding as requests: lists repeat the key, None is dropped.
+            form_fields = [
+                (key, str(item))
+                for key, value in data.items()
+                if value is not None
+                for item in (value if isinstance(value, (list, tuple)) else [value])
+            ]
+            async with self.session.request(
+                method=method,
+                url=url,
+                data=urlencode(form_fields),
+                params=params,
+                headers={
+                    **(headers or {}),
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
             ) as response:
                 return await self._handle_async_response(response)
 
