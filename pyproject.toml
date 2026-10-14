@@ -19,6 +19,9 @@ keywords = [
     "stem-separation", "vocal-remover", "karaoke",
     "music-generation", "audio-to-midi", "noise-reduction", "denoise",
     "mcp", "ai-agents",
+    "speech to text", "speaker diarization", "text to speech", "voice cloning",
+    "stem separation", "vocal remover", "audio to midi", "music generation",
+    "noise reduction", "mcp server",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",

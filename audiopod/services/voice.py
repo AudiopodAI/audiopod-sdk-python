@@ -13,8 +13,51 @@ API Routes:
 """
 
 import json
-from typing import Optional, Dict, Any, List, Union
+import time
+from typing import Optional, Dict, Any, List, Tuple, Union
+
+from ..exceptions import AudioPodError
 from .base import BaseService
+
+_VOICE_FAILED_STATUSES = ("FAILED", "CANCELLED", "ERROR")
+
+
+def _voice_id_and_snapshot(
+    voice: Union[int, Dict[str, Any]]
+) -> Tuple[int, Optional[Dict[str, Any]]]:
+    """Accept a voice id or a voice dict; return (id, dict-or-None)."""
+    if isinstance(voice, dict):
+        voice_id = voice.get("id")
+        if voice_id is None:
+            raise AudioPodError(
+                "Cannot wait for this voice: the response has no numeric 'id'. "
+                f"Got keys: {sorted(voice)}"
+            )
+        return voice_id, voice
+    return voice, None
+
+
+def _voice_ready(voice: Dict[str, Any], voice_id: Any) -> bool:
+    """True when COMPLETED; raise when cloning failed; False while in progress."""
+    status = str(voice.get("status") or "").upper()
+    if status == "COMPLETED":
+        return True
+    if status in _VOICE_FAILED_STATUSES:
+        reason = voice.get("error_message") or "no reason given"
+        raise AudioPodError(
+            f"Voice {voice_id} cloning {status.lower()}: {reason}. "
+            "Try again with a clean 5-30 second recording of a single speaker."
+        )
+    return False
+
+
+def _voice_timeout_message(voice_id: Any, timeout: float, last: Optional[Dict[str, Any]]) -> str:
+    status = (last or {}).get("status") or "unknown"
+    return (
+        f"Voice {voice_id} was not ready after {timeout} seconds (last status: {status}). "
+        "It may still finish; check it with client.voice.get_voice(voice_id) "
+        "or wait longer with client.voice.wait_for_voice_ready(voice_id, timeout=...)."
+    )
 
 
 class VoiceService(BaseService):
@@ -53,19 +96,107 @@ class VoiceService(BaseService):
         name: str,
         audio_file: str,
         description: Optional[str] = None,
+        wait_for_ready: bool = False,
+        timeout: int = 300,
+        poll_interval: float = 3,
     ) -> Dict[str, Any]:
-        """Create a new voice clone from an audio file."""
+        """
+        Create a new voice clone from an audio file.
+
+        A new clone starts as ``PENDING`` and is processed in the background;
+        speech generation with it fails until its status is ``COMPLETED``.
+        Pass ``wait_for_ready=True`` to return only once it is usable.
+
+        Args:
+            name: Name for the voice.
+            audio_file: Path to a clean 5-30 second reference recording.
+            description: Optional description.
+            wait_for_ready: If True, poll the voice status until it is
+                ``COMPLETED`` (raises ``AudioPodError`` if cloning fails and
+                ``TimeoutError`` after ``timeout`` seconds).
+            timeout: Max seconds to wait when ``wait_for_ready`` is True.
+            poll_interval: Seconds between status checks.
+
+        Returns:
+            The voice dict (``id``, ``uuid``, ``status``, ...).
+        """
         files = self._prepare_file_upload(audio_file, "file")
         data = {"name": name}
         if description:
             data["description"] = description
 
         if self.async_mode:
-            return self._async_create_voice(data, files)
-        return self.client.request("POST", "/api/v1/voice/voice-profiles", data=data, files=files)
+            return self._async_create_voice(data, files, wait_for_ready, timeout, poll_interval)
+        voice = self.client.request("POST", "/api/v1/voice/voice-profiles", data=data, files=files)
+        if wait_for_ready:
+            return self.wait_for_voice_ready(voice, timeout=timeout, poll_interval=poll_interval)
+        return voice
 
-    async def _async_create_voice(self, data: Dict, files: Dict) -> Dict[str, Any]:
-        return await self.client.request("POST", "/api/v1/voice/voice-profiles", data=data, files=files)
+    async def _async_create_voice(
+        self,
+        data: Dict,
+        files: Dict,
+        wait_for_ready: bool = False,
+        timeout: int = 300,
+        poll_interval: float = 3,
+    ) -> Dict[str, Any]:
+        voice = await self.client.request(
+            "POST", "/api/v1/voice/voice-profiles", data=data, files=files
+        )
+        if wait_for_ready:
+            return await self._async_wait_for_voice_ready(voice, timeout, poll_interval)
+        return voice
+
+    def wait_for_voice_ready(
+        self,
+        voice: Union[int, Dict[str, Any]],
+        timeout: int = 300,
+        poll_interval: float = 3,
+    ) -> Dict[str, Any]:
+        """
+        Poll ``GET /api/v1/voice/voices/{id}/status`` until a cloned voice is
+        ``COMPLETED`` and return it.
+
+        Args:
+            voice: The numeric voice ``id``, or the dict ``create_voice`` returned.
+            timeout: Max seconds to wait.
+            poll_interval: Seconds between status checks.
+
+        Raises:
+            AudioPodError: cloning failed or was cancelled.
+            TimeoutError: the voice was not ready within ``timeout`` seconds.
+        """
+        if self.async_mode:
+            return self._async_wait_for_voice_ready(voice, timeout, poll_interval)
+        voice_id, current = _voice_id_and_snapshot(voice)
+        deadline = time.monotonic() + timeout
+        while True:
+            if current is not None and _voice_ready(current, voice_id):
+                return current
+            if time.monotonic() >= deadline:
+                raise TimeoutError(_voice_timeout_message(voice_id, timeout, current))
+            time.sleep(poll_interval)
+            current = self.client.request("GET", f"/api/v1/voice/voices/{voice_id}/status")
+
+    async def _async_wait_for_voice_ready(
+        self,
+        voice: Union[int, Dict[str, Any]],
+        timeout: int = 300,
+        poll_interval: float = 3,
+    ) -> Dict[str, Any]:
+        import asyncio
+
+        voice_id, current = _voice_id_and_snapshot(voice)
+        deadline = time.monotonic() + timeout
+        while True:
+            if current is not None and _voice_ready(current, voice_id):
+                return current
+            if time.monotonic() >= deadline:
+                raise TimeoutError(_voice_timeout_message(voice_id, timeout, current))
+            await asyncio.sleep(poll_interval)
+            current = await self.client.request(
+                "GET", f"/api/v1/voice/voices/{voice_id}/status"
+            )
 
     def delete_voice(self, voice_id: Union[int, str]) -> Dict[str, str]:
         """Delete a voice by ID or UUID."""

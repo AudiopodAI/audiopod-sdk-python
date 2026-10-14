@@ -33,6 +33,54 @@ from .services import (
 
 logger = logging.getLogger(__name__)
 
+API_KEYS_URL = "https://audiopod.ai/dashboard/account/api-keys"
+
+AUTH_HINT = f"Set AUDIOPOD_API_KEY (or pass api_key=) — create a key at {API_KEYS_URL}"
+
+BALANCE_HINT = (
+    "API-key requests bill your prepaid API wallet (USD). Top it up at "
+    f"{API_KEYS_URL} or with client.wallet.create_topup_checkout(amount_cents=...); "
+    "check rates with client.wallet.get_pricing()."
+)
+
+
+def _detail_dict(body: Any) -> Dict[str, Any]:
+    """The useful part of an error body: FastAPI nests it under ``detail``."""
+    if isinstance(body, dict):
+        detail = body.get("detail")
+        if isinstance(detail, dict):
+            return detail
+        return body
+    return {}
+
+
+def _server_message(body: Any) -> Optional[str]:
+    if isinstance(body, dict):
+        detail = body.get("detail")
+        if isinstance(detail, str):
+            return detail
+        if isinstance(detail, dict) and isinstance(detail.get("message"), str):
+            return detail["message"]
+        if isinstance(body.get("message"), str):
+            return body["message"]
+    return None
+
+
+def _auth_error(body: Any) -> AuthenticationError:
+    server = _server_message(body)
+    prefix = f"Invalid or missing API key ({server})" if server else "Invalid or missing API key"
+    return AuthenticationError(f"{prefix}. {AUTH_HINT}")
+
+
+def _balance_error(body: Any) -> InsufficientBalanceError:
+    info = _detail_dict(body)
+    server = _server_message(body) or "Insufficient balance"
+    return InsufficientBalanceError(
+        f"{server}. {BALANCE_HINT}",
+        required_cents=info.get("required_cents"),
+        available_cents=info.get("available_cents"),
+    )
+
 
 class BaseClient:
     """Base client with common functionality"""
@@ -72,12 +120,12 @@ class BaseClient:
 
         self.api_key = api_key or os.getenv("AUDIOPOD_API_KEY")
         if not self.api_key:
-            raise AuthenticationError(
-                "API key required. Pass api_key or set AUDIOPOD_API_KEY environment variable."
-            )
+            raise AuthenticationError(f"API key required. {AUTH_HINT}")
 
         if not self.api_key.startswith("ap_"):
-            raise AuthenticationError("Invalid API key format. Keys start with 'ap_'")
+            raise AuthenticationError(
+                f"Invalid API key format: AudioPod keys start with 'ap_'. {AUTH_HINT}"
+            )
 
         self.config = ClientConfig(
             base_url=base_url or "https://api.audiopod.ai",
@@ -96,6 +144,13 @@ class BaseClient:
             "Accept": "application/json",
         }
 
+    @staticmethod
+    def _json_or_none(response: requests.Response) -> Any:
+        try:
+            return response.json()
+        except ValueError:
+            return None
+
     def _handle_response(self, response: requests.Response) -> Dict[str, Any]:
         try:
             response.raise_for_status()
@@ -104,17 +159,9 @@ class BaseClient:
             return response.json()
         except requests.exceptions.HTTPError as e:
             if response.status_code == 401:
-                raise AuthenticationError("Invalid API key")
+                raise _auth_error(self._json_or_none(response))
             elif response.status_code == 402:
-                try:
-                    data = response.json()
-                    raise InsufficientBalanceError(
-                        data.get("message", "Insufficient balance"),
-                        required_cents=data.get("required_cents"),
-                        available_cents=data.get("available_cents"),
-                    )
-                except (ValueError, KeyError):
-                    raise InsufficientBalanceError("Insufficient wallet balance")
+                raise _balance_error(self._json_or_none(response))
             elif response.status_code == 429:
                 raise RateLimitError("Rate limit exceeded")
             else:
@@ -362,18 +409,14 @@ class AsyncClient(BaseClient):
             response.raise_for_status()
             return await response.json()
         except aiohttp.ClientResponseError as e:
-            if response.status == 401:
-                raise AuthenticationError("Invalid API key")
-            elif response.status == 402:
+            if response.status in (401, 402):
                 try:
-                    data = await response.json()
-                    raise InsufficientBalanceError(
-                        data.get("message", "Insufficient balance"),
-                        required_cents=data.get("required_cents"),
-                        available_cents=data.get("available_cents"),
-                    )
-                except:
-                    raise InsufficientBalanceError("Insufficient wallet balance")
+                    body = await response.json(content_type=None)
+                except Exception:
+                    body = None
+                if response.status == 401:
+                    raise _auth_error(body)
+                raise _balance_error(body)
             elif response.status == 429:
                 raise RateLimitError("Rate limit exceeded")
             else:

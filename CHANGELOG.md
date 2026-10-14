@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Added — `create_voice(..., wait_for_ready=True)` (PLAT-3976)
+
+A new clone is `PENDING` while it processes, and speech with it fails until it
+is `COMPLETED`. `create_voice` now takes `wait_for_ready` (default `False`),
+`timeout` and `poll_interval`, and polls the voice status until it is usable;
+a failed or cancelled clone raises `AudioPodError` with the reason. The poll is
+also public as `client.voice.wait_for_voice_ready(voice_or_id)`. Sync and
+async. `audiopod clone` waits too, and no longer crashes on an unknown
+`files=` argument.
+
+### Changed — 401 and 402 errors say how to fix them
+
+`AuthenticationError` now says to set `AUDIOPOD_API_KEY` and where to create a
+key. `InsufficientBalanceError` explains the prepaid API wallet and how to top
+it up, and now reads the server's message and `required_cents` /
+`available_cents` from the nested `detail` object (they were always `None`).
+Exception classes are unchanged.
+
 ### Fixed — form requests without a file reach the API as a form (PLAT-3976)
 
 Requests that send form fields but no file were posted with the client's
