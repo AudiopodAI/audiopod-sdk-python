@@ -26,10 +26,12 @@ print(job["id"], job["status"])
 | Noise reduction | `client.denoiser.denoise(...)` | [noise reduction](https://docs.audiopod.ai/quickstarts/noise-reduction) |
 | Speaker separation | `client.speaker.diarize(...)` | [speakers](https://docs.audiopod.ai/api-reference/speaker-separation) |
 
-**Billing:** API-key requests bill a prepaid USD **API wallet**. Your first API
-key comes with a $1 starter credit (verified email); see rates with
-`client.wallet.get_pricing()` and top up from the
-[API keys page](https://audiopod.ai/dashboard/account/api-keys). Coding agents:
+**Billing:** API-key requests are paid from a prepaid USD **API wallet** first
+and, when it can't cover a job, from your account's plan or pay-as-you-go
+credits. Your first API key comes with a $1 starter credit in the wallet
+(verified email). See wallet rates with `client.wallet.get_pricing()`; top up
+the wallet from the [API keys page](https://audiopod.ai/dashboard/account/api-keys)
+or add credits at [audiopod.ai/pricing](https://audiopod.ai/pricing). Coding agents:
 read [AGENTS.md](AGENTS.md).
 
 This SDK is the **Platform (API + Agent)** surface of AudioPod, alongside the

@@ -351,7 +351,8 @@ def main(argv: Optional[list[str]] = None) -> None:
     except AuthenticationError as exc:
         sys.stderr.write(f"auth error: {exc}\n")
         sys.exit(2)
-    except AudioPodError as exc:
+    except (AudioPodError, TimeoutError) as exc:
+        # The SDK's waits raise the built-in TimeoutError.
         sys.stderr.write(f"audiopod: {exc}\n")
         sys.exit(1)
     except KeyboardInterrupt:

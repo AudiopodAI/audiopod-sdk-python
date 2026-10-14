@@ -24,13 +24,15 @@ pip install audiopod
 
 ## Billing
 
-- API-key requests bill a prepaid USD **API wallet**, separate from the
-  credits a person uses in the web app. A first API key comes with a $1
-  starter credit (verified email).
+- API-key requests are paid from a prepaid USD **API wallet** first and, when
+  the wallet can't cover a job, from the account's plan or pay-as-you-go
+  credits. A 402 means neither can cover it. A first API key comes with a $1
+  starter credit in the wallet (verified email).
 - Rates: `client.wallet.get_pricing()`; balance: `client.wallet.get_balance()`;
   estimate: `client.wallet.estimate_cost(service_type, duration_seconds=...)`.
-- Top up: the API keys page above, or
-  `client.wallet.create_topup_checkout(amount_cents=...)` (returns a checkout URL).
+- Top up the wallet: the API keys page above, or
+  `client.wallet.create_topup_checkout(amount_cents=...)` (returns a checkout URL);
+  or add credits / upgrade at https://audiopod.ai/pricing.
 - The MCP server (`https://mcp.audiopod.ai`) signed in with OAuth uses the
   account's credits instead of the API wallet.
 
@@ -77,7 +79,7 @@ still `PENDING`, and speech with it fails ("Voice not ready") until it is
 | Exception | Meaning | Fix |
 |---|---|---|
 | `AuthenticationError` | Missing, malformed or revoked key | Set `AUDIOPOD_API_KEY`; create a key at the API keys page |
-| `InsufficientBalanceError` (402) | API wallet too low for this job; `.required_cents`, `.available_cents` | Top up the API wallet, then retry |
+| `InsufficientBalanceError` (402) | Neither the API wallet nor the account's credits cover this job; `.required_cents`, `.available_cents` | Top up the API wallet or add credits, then retry |
 | `RateLimitError` (429) | Too many requests | Back off and retry |
 | `ValidationError` | Bad arguments, caught before any request | Fix the arguments named in the message |
 | `APIError` (`.status_code`) | Any other API error; the message carries the server's reason | 404 on a voice usually means it is not yours or not ready yet |

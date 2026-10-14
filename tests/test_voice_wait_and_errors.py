@@ -176,13 +176,23 @@ def test_402_reads_nested_detail_and_points_at_top_up():
     assert err.value.available_cents == 10
     assert "Required: $0.50" in str(err.value)
     assert "prepaid API wallet" in str(err.value)
+    assert "plan or pay-as-you-go credits" in str(err.value)
+    assert "https://audiopod.ai/pricing" in str(err.value)
     assert "create_topup_checkout" in str(err.value)
+    assert "Available: $0.10. API-key requests" in str(err.value)
 
 
 def test_402_with_plain_string_detail():
     client = Client(api_key="ap_test")
     with pytest.raises(InsufficientBalanceError, match="Not enough credits"):
-        client._handle_response(_response(402, {"detail": "Not enough credits"}))
+        client._handle_response(_response(402, {"detail": "Not enough credits."}))
+
+
+def test_402_has_no_double_period():
+    client = Client(api_key="ap_test")
+    with pytest.raises(InsufficientBalanceError) as err:
+        client._handle_response(_response(402, {"detail": "Insufficient balance."}))
+    assert str(err.value).startswith("Insufficient balance. API-key requests")
 
 
 def test_cli_clone_uploads_the_reference_and_waits(monkeypatch, sample):
@@ -205,3 +215,21 @@ def test_cli_clone_uploads_the_reference_and_waits(monkeypatch, sample):
     assert seen["audio_file"] == sample
     assert seen["wait_for_ready"] is True
     assert seen["timeout"] == 300
+
+
+def test_cli_clone_timeout_exits_cleanly(monkeypatch, sample, capsys):
+    """A still-PENDING voice past --timeout prints a one-line error, no traceback."""
+    from audiopod import cli
+
+    svc, _ = _svc(PENDING)
+
+    class _Fake:
+        voice = svc
+
+    monkeypatch.setattr(cli, "_client", lambda _args: _Fake())
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["clone", sample, "--name", "Me", "--timeout", "0"])
+    assert exit_info.value.code == 1
+    err = capsys.readouterr().err
+    assert err.startswith("audiopod: Voice 7 was not ready after 0 seconds")
+    assert "Traceback" not in err

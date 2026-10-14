@@ -38,9 +38,10 @@ API_KEYS_URL = "https://audiopod.ai/dashboard/account/api-keys"
 AUTH_HINT = f"Set AUDIOPOD_API_KEY (or pass api_key=) — create a key at {API_KEYS_URL}"
 
 BALANCE_HINT = (
-    "API-key requests bill your prepaid API wallet (USD). Top it up at "
-    f"{API_KEYS_URL} or with client.wallet.create_topup_checkout(amount_cents=...); "
-    "check rates with client.wallet.get_pricing()."
+    "API-key requests are paid from your prepaid API wallet (USD) first, then from "
+    "your account's plan or pay-as-you-go credits; neither can cover this job. "
+    f"Top up the API wallet at {API_KEYS_URL} (or client.wallet.create_topup_checkout"
+    "(amount_cents=...)), or add credits or upgrade at https://audiopod.ai/pricing."
 )
 
 
@@ -67,14 +68,14 @@ def _server_message(body: Any) -> Optional[str]:
 
 
 def _auth_error(body: Any) -> AuthenticationError:
-    server = _server_message(body)
+    server = (_server_message(body) or "").rstrip(" .")
     prefix = f"Invalid or missing API key ({server})" if server else "Invalid or missing API key"
     return AuthenticationError(f"{prefix}. {AUTH_HINT}")
 
 
 def _balance_error(body: Any) -> InsufficientBalanceError:
     info = _detail_dict(body)
-    server = _server_message(body) or "Insufficient balance"
+    server = (_server_message(body) or "Insufficient balance").rstrip(" .")
     return InsufficientBalanceError(
         f"{server}. {BALANCE_HINT}",
         required_cents=info.get("required_cents"),
