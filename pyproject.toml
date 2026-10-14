@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "audiopod"
-version = "2.10.1"
+version = "2.11.0"
 description = "AudioPod AI audio API for Python: speech-to-text transcription with speaker diarization, stem separation, text-to-speech, voice cloning, music generation, audio-to-MIDI and noise reduction"
 readme = "README.md"
 license = {text = "MIT"}
