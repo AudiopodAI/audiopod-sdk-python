@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### Fixed — form requests without a file reach the API as a form (PLAT-3976)
+
+Requests that send form fields but no file were posted with the client's
+default `Content-Type: application/json`, so the API ignored every field.
+`client.voice.generate_speech(...)` failed with 422 (`input_text` missing), and
+URL-based `stem_extraction.separate(url=...)`, `midi.convert(url=...)`,
+`denoiser.denoise(url=...)` and `speaker.diarize(url=...)` arrived without
+their URL. The sync client now lets `requests` set the form content type, and
+`AsyncClient` (which dropped the fields entirely) sends them urlencoded.
+
+### Fixed — `denoiser.denoise(mode=...)` is honoured
+
+The mode is now sent as the API's `quality_mode` field. It used to be sent as
+`mode`, which the API ignored, so every job ran at the `"studio"` default.
+`mode` now defaults to `None` (server default, `"studio"`), which keeps that
+behaviour for callers that never set it.
+
+### Docs
+
+README opens with a one-call quickstart per task and a "Using with AI agents"
+section; `examples/` adds `fastapi-transcribe` and `stems-cli`.
+
 ## 2.10.1
 
 ### Fixed — an empty selection no longer means "the whole book" (PLAT-3944)

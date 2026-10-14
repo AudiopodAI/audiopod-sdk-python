@@ -5,14 +5,21 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "audiopod"
 version = "2.10.1"
-description = "AudioPod SDK + CLI for Python - Professional Audio Processing powered by AI"
+description = "AudioPod AI audio API for Python: speech-to-text transcription with speaker diarization, stem separation, text-to-speech, voice cloning, music generation, audio-to-MIDI and noise reduction"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.8"
 authors = [
     {name = "AudioPod AI", email = "support@audiopod.ai"}
 ]
-keywords = ["audiopod", "audio", "ai", "voice", "cloning", "transcription", "stem-separation", "music", "sdk"]
+keywords = [
+    "audiopod", "audio", "ai", "audio-api", "sdk",
+    "speech-to-text", "transcription", "speaker-diarization", "subtitles",
+    "text-to-speech", "tts", "voice-cloning",
+    "stem-separation", "vocal-remover", "karaoke",
+    "music-generation", "audio-to-midi", "noise-reduction", "denoise",
+    "mcp", "ai-agents",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -35,6 +42,8 @@ dependencies = [
 Homepage = "https://audiopod.ai"
 Documentation = "https://docs.audiopod.ai"
 Repository = "https://github.com/AudiopodAI/audiopod-python"
+"AI agents" = "https://docs.audiopod.ai/agents"
+"MCP server" = "https://docs.audiopod.ai/sdks/mcp"
 
 [project.scripts]
 audiopod = "audiopod.cli:main"
