@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.11.1 — 2026-10-16
+
+### Fixed — readable API errors when `detail` is an object (PLAT-3961)
+
+When the API returns a structured error (`{"detail": {"message": ..., ...}}`),
+`APIError` now shows `detail.message` instead of the raw dict.
+
 ## 2.11.0 — 2026-10-14
 
 ### Added — `create_voice(..., wait_for_ready=True)` (PLAT-3976)
