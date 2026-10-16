@@ -349,6 +349,13 @@ except APIError as e:
     print(f"API error ({e.status_code}): {e}")
 ```
 
+## Examples
+
+Standalone example apps you can clone and run:
+
+- [audiopod-example-fastapi-transcribe](https://github.com/AudiopodAI/audiopod-example-fastapi-transcribe): speaker-labelled transcription in a FastAPI app
+- [audiopod-example-stems-cli](https://github.com/AudiopodAI/audiopod-example-stems-cli): split a song into stems from the command line
+
 ## Documentation
 
 - [API Reference](https://docs.audiopod.ai)
