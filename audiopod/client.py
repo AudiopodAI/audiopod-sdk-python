@@ -167,9 +167,8 @@ class BaseClient:
                 raise RateLimitError("Rate limit exceeded")
             else:
                 try:
-                    error_data = response.json()
-                    message = error_data.get("detail", str(e))
-                except:
+                    message = _server_message(response.json()) or str(e)
+                except Exception:
                     message = str(e)
                 raise APIError(f"API error: {message}", status_code=response.status_code)
 
