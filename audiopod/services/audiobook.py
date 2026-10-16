@@ -9,12 +9,159 @@ for the whole flow in one call, or drive each step yourself.
 
 import time
 import warnings
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict
 
 from ..exceptions import APIError
 from .base import BaseService
 
 _BASE = "/api/v1/audiobook"
+
+# PLAT-3970: how an edited, previously narrated passage is re-narrated.
+NARRATION_MODES = ("auto", "sentence", "passage")
+# Batch runs and cost estimates have no strict "sentence" mode.
+BATCH_NARRATION_MODES = ("auto", "passage")
+
+NarrationMode = Literal["auto", "sentence", "passage"]
+BatchNarrationMode = Literal["auto", "passage"]
+
+
+class NarrationBilling(TypedDict, total=False):
+    """The ``billing`` object on a ``narrate_paragraph`` response.
+
+    ``mode``, ``billed_chars``, ``passage_chars``, ``changed_sentences`` and
+    ``reason`` describe how an edited passage was re-narrated and billed.
+    """
+
+    is_free_regen: bool
+    estimated_credits: int
+    estimated_chars: int
+    estimated_seconds: float
+    take_number_after: int
+    #: ``"sentence"`` (only the changed sentences), ``"passage"`` (the whole
+    #: passage) or ``"none"`` (nothing audible changed; nothing narrated).
+    mode: Literal["sentence", "passage", "none"]
+    #: Characters billed (equal to ``estimated_chars``); 0 when free.
+    billed_chars: int
+    passage_chars: int
+    changed_sentences: Optional[int]
+    #: Why the whole passage is narrated, or ``"no_audible_change"``.
+    reason: Optional[str]
+    skipped: bool
+
+
+class NarrateParagraphResponse(TypedDict, total=False):
+    """Response of ``narrate_paragraph``. ``status`` is ``"skipped"`` (with
+    ``billing.reason == "no_audible_change"``) when the edit is not heard."""
+
+    task_id: Optional[str]
+    job_id: Optional[int]
+    paragraph_id: str
+    status: str
+    engine: Optional[str]
+    billing: NarrationBilling
+
+
+class BatchNarrationResponse(TypedDict, total=False):
+    """Response of ``batch_narrate``."""
+
+    job_id: Optional[int]
+    total_paragraphs: int
+    skipped_paragraphs: int
+    skipped_needs_review: int
+    #: Of ``skipped_paragraphs``: edits with no audible change, kept as is and
+    #: not charged. Send ``mode="passage"`` to re-narrate them anyway.
+    skipped_no_audible_change: int
+    estimated_completion_time: Optional[str]
+    engine: Optional[str]
+    run_id: Optional[str]
+    warning: Optional[Dict[str, Any]]
+
+
+class ParagraphTake(TypedDict, total=False):
+    """One History entry (take) of a paragraph."""
+
+    id: str
+    paragraph_id: str
+    take_number: int
+    text: str
+    voice_id: Optional[int]
+    audio_file_path: Optional[str]
+    duration_seconds: Optional[float]
+    created_at: str
+    #: ``"full"``, ``"spliced"`` (only the changed sentences were narrated
+    #: into ``base_take_id``) or ``"splice_fallback"`` (an edit narrated as the
+    #: whole passage so the change blends in).
+    kind: Literal["full", "spliced", "splice_fallback"]
+    base_take_id: Optional[str]
+    #: ``[start, end)`` character ranges of ``text`` newly narrated (spliced).
+    changed_ranges: Optional[List[List[int]]]
+
+
+class SentenceEditsBreakdown(TypedDict, total=False):
+    """``breakdown.sentence_edits`` on ``GET /audiobook/projects/{id}/cost``."""
+
+    count: int
+    characters: int
+    cents: int
+    credits: int
+    free_count: int
+
+
+class CostAmount(TypedDict, total=False):
+    characters: int
+    cents: int
+    credits: int
+
+
+class CostRegenerations(CostAmount, total=False):
+    count: int
+
+
+class CostTotals(TypedDict, total=False):
+    charged_cents: int
+    refunded_cents: int
+    net_cents: int
+    charged_credits: int
+    refunded_credits: int
+    net_credits: int
+    characters_billed: int
+
+
+class CostBreakdown(TypedDict, total=False):
+    first_narration: CostAmount
+    regenerations: CostRegenerations
+    free_regenerations: int
+    review_approvals: int
+    sentence_edits: SentenceEditsBreakdown
+
+
+class ChapterCost(TypedDict, total=False):
+    chapter_id: str
+    chapter_number: int
+    title: str
+    characters: int
+    cents: int
+    credits: int
+
+
+class ProjectCost(TypedDict, total=False):
+    """Response of ``get_cost``: what narrating the book has actually cost."""
+
+    project_id: str
+    currency: str
+    #: ``"api_wallet"``, ``"credits"`` or ``"mixed"``.
+    billing_lane: str
+    totals: CostTotals
+    breakdown: CostBreakdown
+    chapters: List[ChapterCost]
+    partial: bool
+    notes: List[str]
+    as_of: str
+
+
+def _check_mode(mode: Optional[str], allowed: Tuple[str, ...]) -> None:
+    if mode is not None and mode not in allowed:
+        raise ValueError(f"mode must be one of {', '.join(allowed)}; got {mode!r}")
 
 # Project statuses that mean "the manuscript is not parsed yet". `draft` is a
 # project that has never been given a manuscript; `parsing` is a parse in flight
@@ -290,9 +437,24 @@ class AudiobookService(BaseService):
             return self._async_request("GET", path, params=params or None)
         return self.client.request("GET", path, params=params or None)
 
-    def narrate_paragraph(self, project_id: str, paragraph_id: str, **options: Any) -> Dict[str, Any]:
+    def narrate_paragraph(
+        self,
+        project_id: str,
+        paragraph_id: str,
+        mode: Optional[NarrationMode] = None,
+        **options: Any,
+    ) -> NarrateParagraphResponse:
         """
         Generate (or regenerate) audio for a single paragraph; records a take.
+
+        ``mode`` chooses how an edited, already narrated
+        paragraph is re-narrated: ``"auto"`` (server default) narrates only the
+        changed sentences when the edit is small and bills only their
+        characters, otherwise the whole passage; ``"sentence"`` requires that
+        and raises on 409 ``sentence_mode_unavailable``; ``"passage"`` always
+        narrates the whole passage. An edit with no audible change returns
+        ``status == "skipped"`` with ``billing.reason == "no_audible_change"``
+        and is not charged.
 
         Options: ``voice_id``, ``text_override``, ``narration_speed``,
         ``narration_style``, ``emotion``, ``character_name``, ``direction``.
@@ -306,7 +468,10 @@ class AudiobookService(BaseService):
         instruction of roughly a dozen words. A longer one comes back with a
         ``warnings`` entry saying how much is not voiced.
         """
+        _check_mode(mode, NARRATION_MODES)
         body = {k: v for k, v in options.items() if v is not None}
+        if mode is not None:
+            body["mode"] = mode
         path = f"{_BASE}/projects/{project_id}/paragraphs/{paragraph_id}/narrate"
         if self.async_mode:
             return self._async_request("POST", path, json_data=body)
@@ -322,9 +487,15 @@ class AudiobookService(BaseService):
         include_locked: bool = False,
         include_skipped: bool = False,
         narration_settings: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        mode: Optional[BatchNarrationMode] = None,
+    ) -> BatchNarrationResponse:
         """
         Queue one job that narrates the selected paragraphs sequentially.
+
+        ``mode``: ``"auto"`` (server default) re-narrates only
+        the changed sentences of small edits; ``"passage"`` narrates whole
+        passages. Edits with no audible change are skipped and counted in
+        ``skipped_no_audible_change``.
 
         With both ``chapter_ids`` and ``paragraph_ids`` omitted the whole
         project is narrated. Already-completed, locked and skip-flagged
@@ -352,6 +523,7 @@ class AudiobookService(BaseService):
         """
         _check_selection("chapter_ids", chapter_ids)
         _check_selection("paragraph_ids", paragraph_ids)
+        _check_mode(mode, BATCH_NARRATION_MODES)
         body: Dict[str, Any] = {
             "include_completed": include_completed,
             "include_locked": include_locked,
@@ -364,6 +536,8 @@ class AudiobookService(BaseService):
             body["chapter_ids"] = chapter_ids
         if paragraph_ids is not None:
             body["paragraph_ids"] = paragraph_ids
+        if mode is not None:
+            body["mode"] = mode
         path = f"{_BASE}/projects/{project_id}/narration/batch"
         if self.async_mode:
             return self._async_request("POST", path, json_data=body)
@@ -527,11 +701,41 @@ class AudiobookService(BaseService):
             return self._async_request("GET", f"{_BASE}/voices/languages")
         return self.client.request("GET", f"{_BASE}/voices/languages")
 
-    def cost_estimate(self, project_id: str) -> Dict[str, Any]:
-        """Per-paragraph cost breakdown for a project before narrating."""
+    def cost_estimate(
+        self,
+        project_id: str,
+        chapter_id: Optional[str] = None,
+        paragraph_id: Optional[str] = None,
+        mode: Optional[BatchNarrationMode] = None,
+    ) -> Dict[str, Any]:
+        """Per-paragraph cost breakdown for a project before narrating.
+
+        Narrow it with ``chapter_id`` or ``paragraph_id``. ``mode`` (rolling
+        out): ``"auto"`` prices an edited passage by its changed sentences when
+        it would be narrated that way; ``"passage"`` prices the whole passage.
+        Each paragraph then carries ``mode``, ``billed_chars``,
+        ``passage_chars`` and ``reason``.
+        """
+        _check_mode(mode, BATCH_NARRATION_MODES)
+        params = {
+            k: v
+            for k, v in (("chapter_id", chapter_id), ("paragraph_id", paragraph_id), ("mode", mode))
+            if v is not None
+        }
+        path = f"{_BASE}/projects/{project_id}/cost-estimate"
         if self.async_mode:
-            return self._async_request("GET", f"{_BASE}/projects/{project_id}/cost-estimate")
-        return self.client.request("GET", f"{_BASE}/projects/{project_id}/cost-estimate")
+            return self._async_request("GET", path, params=params or None)
+        return self.client.request("GET", path, params=params or None)
+
+    def get_cost(self, project_id: str) -> ProjectCost:
+        """What narrating this book has actually cost so far, read from billing
+        records (not estimated): ``totals``, ``breakdown`` (incl.
+        ``sentence_edits``), per-``chapters`` net, ``partial``, ``notes``,
+        ``as_of``. Every ``*_cents`` value is US cents."""
+        path = f"{_BASE}/projects/{project_id}/cost"
+        if self.async_mode:
+            return self._async_request("GET", path)
+        return self.client.request("GET", path)
 
     # ----------------------------------------------------------------- narration
     def start_narration(
