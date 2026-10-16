@@ -29,8 +29,7 @@ class NarrationBilling(TypedDict, total=False):
     """The ``billing`` object on a ``narrate_paragraph`` response.
 
     ``mode``, ``billed_chars``, ``passage_chars``, ``changed_sentences`` and
-    ``reason`` are present where sentence-level re-narration is available
-    (rolling out).
+    ``reason`` describe how an edited passage was re-narrated and billed.
     """
 
     is_free_regen: bool
@@ -448,7 +447,7 @@ class AudiobookService(BaseService):
         """
         Generate (or regenerate) audio for a single paragraph; records a take.
 
-        ``mode`` (rolling out) chooses how an edited, already narrated
+        ``mode`` chooses how an edited, already narrated
         paragraph is re-narrated: ``"auto"`` (server default) narrates only the
         changed sentences when the edit is small and bills only their
         characters, otherwise the whole passage; ``"sentence"`` requires that
@@ -493,7 +492,7 @@ class AudiobookService(BaseService):
         """
         Queue one job that narrates the selected paragraphs sequentially.
 
-        ``mode`` (rolling out): ``"auto"`` (server default) re-narrates only
+        ``mode``: ``"auto"`` (server default) re-narrates only
         the changed sentences of small edits; ``"passage"`` narrates whole
         passages. Edits with no audible change are skipped and counted in
         ``skipped_no_audible_change``.
